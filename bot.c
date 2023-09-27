@@ -313,7 +313,6 @@ int startServer(int port) {
     return 0;
 }
 
-
 int handlePostRequest(int clientSocket) {
     char buffer[1024];
     memset(buffer, 0, sizeof(buffer));
@@ -333,7 +332,7 @@ int handlePostRequest(int clientSocket) {
         return -1;
     }
 
-    // Estrai il campo "command" dal JSON
+    // Estrai il campo "command" dal JSON come stringa
     cJSON *command = cJSON_GetObjectItemCaseSensitive(root, "command");
     if (!cJSON_IsString(command)) {
         fprintf(stderr, "Il campo 'command' non è una stringa\n");
@@ -347,7 +346,7 @@ int handlePostRequest(int clientSocket) {
     // Puoi eseguire il comando qui
 
     // Invia una risposta al client
-    const char *response = "HTTP/1.1 200 OK\r\nContent-Length: 12\r\n\r\nHello, World!";
+    const char *response = "HTTP/1.1 200 OK\r\nContent-Length: 15\r\n\r\nCommand received";
     send(clientSocket, response, strlen(response), 0);
 
     // Rilascia la memoria allocata per il JSON

