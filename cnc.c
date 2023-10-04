@@ -29,13 +29,7 @@ void handle_post_request(int client_socket, char *data) {
     if (json == NULL) {
         char response[] = "HTTP/1.1 400 Bad Request\r\n\r\n";
         send(client_socket, response, strlen(response), 0);
-        cJSON_Delete(json);
         return;
-    }
-
-    struct Data myData;
-    for (int i = 0; i < 20; i++) {
-        strcpy(myData.ports[i], "");
     }
 
     cJSON *clientIPItem = cJSON_GetObjectItem(json, "clientIP");
@@ -43,27 +37,17 @@ void handle_post_request(int client_socket, char *data) {
 
     if (!cJSON_HasObjectItem(json, "clientIP") || !cJSON_HasObjectItem(json, "ports") || !cJSON_IsArray(portsArray)) {
         // Se uno dei campi non è presente o "ports" non è un array, gestisci l'errore
+        cJSON_Delete(json);
         char response[] = "HTTP/1.1 400 Bad Request\r\n\r\n";
         send(client_socket, response, strlen(response), 0);
-        cJSON_Delete(json);
         return;
     }
 
-    // Ora puoi accedere in modo sicuro ai campi "clientIP" e "ports"
-    strcpy(myData.clientIP, clientIPItem->valuestring);
-
-    // Leggi i dati dall'array "ports"
-    for (int i = 0; i < cJSON_GetArraySize(portsArray) && i < 20; i++) {
-        cJSON *portItem = cJSON_GetArrayItem(portsArray, i);
-        if (cJSON_IsNumber(portItem)) {
-            snprintf(myData.ports[i], sizeof(myData.ports[i]), "%d", portItem->valueint);
-        }
-    }
+    char *clientIP = strdup(clientIPItem->valuestring);
 
     cJSON_Delete(json);
 
-    // Ora puoi utilizzare i dati nella struttura
-    printf("Client IP: %s\n", myData.clientIP);
+    printf("Client IP: %s\n", clientIP);
 
     // Prepara la risposta JSON
     cJSON *responseJson = cJSON_CreateObject();
@@ -81,35 +65,42 @@ void handle_post_request(int client_socket, char *data) {
     send(client_socket, responseJsonStr, strlen(responseJsonStr), 0);
     free(responseJsonStr);
 
-    // Crea e scrivi il file di testo
-    char filename[32];
-    sprintf(filename, "%s.txt", myData.clientIP);
-    FILE *file = fopen(filename, "w");
+    // Apri o crea il file "bots.txt" in modalità append
+    FILE *file = fopen("bots.txt", "a");
     if (file != NULL) {
         // Scrivi il timestamp
         time_t now;
         time(&now);
         struct tm *tm_info = localtime(&now);
         char timestamp[20];
-        strftime(timestamp, sizeof(timestamp), "%Y%m%d %H:%M:%S", tm_info);
-        fprintf(file, "%s\n", timestamp);
+        strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", tm_info);
 
-        // Scrivi la lista delle porte solo se sono presenti
-        int hasPorts = 0; // Flag per verificare se ci sono porte da scrivere
-        for (int i = 0; i < 20; i++) {
-            if (strlen(myData.ports[i]) > 0) {
-                if (hasPorts) {
-                    fprintf(file, "|");
+        // Scrivi l'indirizzo IP estratto dalla variabile clientIP
+        fprintf(file, "%s|%s|", timestamp, clientIP);
+
+        // Scrivi le porte se sono presenti
+        if (cJSON_IsArray(portsArray)) {
+            fprintf(file, "|"); // Aggiungi il separatore dopo l'indirizzo IP
+
+            for (int i = 0; i < cJSON_GetArraySize(portsArray); i++) {
+                cJSON *portItem = cJSON_GetArrayItem(portsArray, i);
+                if (cJSON_IsNumber(portItem)) {
+                    fprintf(file, "%d", portItem->valueint);
+
+                    if (i < cJSON_GetArraySize(portsArray) - 1) {
+                        fprintf(file, ",");
+                    }
                 }
-                fprintf(file, "%s", myData.ports[i]);
-                hasPorts = 1; // Imposta il flag a 1 quando almeno una porta è stata scritta
             }
         }
-        if (hasPorts) {
-            fprintf(file, "\n");
-        }
+
+        // Aggiungi un carattere di nuova riga alla fine
+        fprintf(file, "\n");
         fclose(file);
     }
+
+    // Libera la memoria allocata per clientIP
+    free(clientIP);
 }
 
 
