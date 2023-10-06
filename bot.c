@@ -8,9 +8,11 @@
 #include "cJSON.h"
 #include <ifaddrs.h>
 #include <arpa/inet.h>
+#include <errno.h>
 
 #define MAX_LISTENING_PORTS 1024
 #define JSON_BUFFER_SIZE 1024
+#define MAX_REQUEST_SIZE 1024
 
 struct NetworkInterface {
     char name[256];
@@ -256,7 +258,6 @@ int sendServerInfo(struct ServerInfo *info, const char *serverURL) {
     return 0;  // Successo nell'invio delle informazioni al server HTTP
 }
 
-
 int startServer(int port) {
     int sockfd, newsockfd;
     socklen_t clilen;
@@ -314,43 +315,57 @@ int startServer(int port) {
 }
 
 int handlePostRequest(int clientSocket) {
-    char buffer[1024];
+    char buffer[MAX_REQUEST_SIZE];
+    ssize_t bytesRead;
+
     memset(buffer, 0, sizeof(buffer));
 
     // Leggi i dati inviati dal client (richiesta POST)
-    ssize_t bytes_read = recv(clientSocket, buffer, sizeof(buffer), 0);
+    bytesRead = recv(clientSocket, buffer, sizeof(buffer), 0);
 
-    if (bytes_read == -1) {
-        perror("Errore nella lettura della richiesta");
+    if (bytesRead == -1) {
+        perror("Errore nella lettura della richiesta del client");
         return -1;
     }
 
+    // Trova i dati POST (supponendo una richiesta semplice senza chunking)
+    char *data = strstr(buffer, "\r\n\r\n");
+    if (data == NULL) {
+        fprintf(stderr, "Errore nei dati POST: dati mancanti o formato non supportato\n");
+        return -1;
+    }
+
+    data += 4; // Avanza oltre la sequenza "\r\n\r\n"
+
     // Analizza il JSON utilizzando libcjson
-    cJSON *root = cJSON_Parse(buffer);
-    if (!root) {
+    cJSON *json = cJSON_Parse(data);
+    if (json == NULL) {
         fprintf(stderr, "Errore nel parsing del JSON\n");
         return -1;
     }
 
-    // Estrai il campo "command" dal JSON come stringa
-    cJSON *command = cJSON_GetObjectItemCaseSensitive(root, "command");
-    if (!cJSON_IsString(command)) {
-        fprintf(stderr, "Il campo 'command' non è una stringa\n");
-        cJSON_Delete(root);
+    cJSON *commandItem = cJSON_GetObjectItem(json, "command");
+    if (!cJSON_IsString(commandItem)) {
+        fprintf(stderr, "Errore: campo 'command' non presente o non è una stringa\n");
+        cJSON_Delete(json);
         return -1;
     }
 
-    const char *commandStr = command->valuestring;
-    printf("Comando ricevuto: %s\n", commandStr);
+    const char *command = commandItem->valuestring;
 
-    // Puoi eseguire il comando qui
+    // Esegui il comando Linux specificato nel campo "command"
+    if (strcmp(command, "get info") == 0) {
+        // Esegui i comandi Linux richiesti e prepara la risposta JSON
+        // ...
+        // Invia la risposta JSON al client
+        // ...
+    } else {
+        fprintf(stderr, "Comando sconosciuto: %s\n", command);
+        // Gestisci il comando sconosciuto o invia una risposta di errore
+        // ...
+    }
 
-    // Invia una risposta al client
-    const char *response = "HTTP/1.1 200 OK\r\nContent-Length: 15\r\n\r\nCommand received";
-    send(clientSocket, response, strlen(response), 0);
-
-    // Rilascia la memoria allocata per il JSON
-    cJSON_Delete(root);
-
+    cJSON_Delete(json);
     return 0;
 }
+

