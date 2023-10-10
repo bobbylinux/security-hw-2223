@@ -412,16 +412,16 @@ cJSON *getInfo() {
         pclose(unameFile);
     }
 
-    // Esegui il comando completo "ifconfig" e ottieni l'output
-    FILE *ifconfigFile = popen("ifconfig", "r");
-    if (ifconfigFile) {
+    // Esegui il comando completo "ip a" e ottieni l'output
+    FILE *ipAFile = popen("ip a", "r");
+    if (ipAFile) {
         char result[512];
         char ifconfigOutput[4096] = ""; // Aumentato il buffer
-        while (fgets(result, sizeof(result), ifconfigFile) != NULL) {
+        while (fgets(result, sizeof(result), ipAFile) != NULL) {
             strcat(ifconfigOutput, result);
         }
         cJSON_AddStringToObject(infoJson, "infoNetwork", ifconfigOutput);
-        pclose(ifconfigFile);
+        pclose(ipAFile);
     }
 
     return infoJson;
