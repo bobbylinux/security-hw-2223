@@ -346,6 +346,7 @@ int isBotListening(const char *address, int port) {
 
     if (connect(sockfd, (struct sockaddr *)&server_addr, sizeof(server_addr)) == 0) {
         // Connessione riuscita, chiudi il socket e restituisci 1
+        close(sockfd);
         return 1;
     } else {
         close(sockfd);
