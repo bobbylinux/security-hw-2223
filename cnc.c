@@ -206,8 +206,8 @@ void handle_post_request(int client_socket, char *data) {
     free(clientIP);
 }
 
-// Funzione per inviare la richiesta a un bot specifico o a tutti i bot
-void sendRequestToBot(const char *target, const char *requestJsonStr) {
+// Funzione per inviare la richiesta a un bot specifico o a tutti i bot in modo asincrono
+void sendRequestToBotAsync(const char *target, const char *requestJsonStr) {
     // Apri il file "bots.txt" in modalità di lettura
     FILE *file = fopen("bots.txt", "r");
     if (file == NULL) {
@@ -218,27 +218,24 @@ void sendRequestToBot(const char *target, const char *requestJsonStr) {
     char line[1024];
     int currentBot = 0;
 
+    // Inizializza il gestore multiplo
+    CURLM *multi_handle = curl_multi_init();
+
     // Cicla attraverso tutti i bot nel file bots.txt
     while (fgets(line, sizeof(line), file) != NULL) {
         currentBot++;
         char *timestamp = strtok(line, "|");
         char *ip = strtok(NULL, "|");
         char *portStr = strtok(NULL, "|");
-        char responseData[4096];  // Dimensione massima della risposta
-        memset(responseData, 0, sizeof(responseData));  // Inizializza la variabile
 
         if (ip != NULL && portStr != NULL) {
             int port = atoi(portStr);
 
             // Controlla se il target è un numero o un asterisco "*"
             if (strcmp(target, "*") == 0 || (atoi(target) == currentBot)) {
-                // Invia la richiesta HTTP POST al bot corrente
-                CURL *curl;
-                CURLcode res;
+                // Inizializza la nuova richiesta
+                CURL *curl = curl_easy_init();
 
-                curl_global_init(CURL_GLOBAL_DEFAULT);
-
-                curl = curl_easy_init();
                 if (curl) {
                     // Crea l'URL con l'indirizzo IP e la porta
                     char url[100];
@@ -250,47 +247,22 @@ void sendRequestToBot(const char *target, const char *requestJsonStr) {
                     curl_easy_setopt(curl, CURLOPT_POSTFIELDS, requestJsonStr);
                     // Esegui la richiesta POST
                     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writeCallback);
-                    // setto la response data
-                    curl_easy_setopt(curl, CURLOPT_WRITEDATA, responseData);
-                    // Esegui la richiesta POST
-                    res = curl_easy_perform(curl);
-                    if (res != CURLE_OK) {
-                        fprintf(stderr, "curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
-                    } else {
-                        // Verifica il codice di stato HTTP della risposta
-                        long http_code = 0;
-                        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
 
-                        if (http_code == 200) {
-                            // La richiesta ha avuto successo, quindi non stampiamo il JSON ma rispondiamo con il messaggio
-                            printf("Request sent by bot # %d\n", currentBot);
-                        } else if (http_code == 500) {
-                            // La richiesta ha generato un errore lato server
-                            cJSON *responseJson = cJSON_Parse(responseData);
-                            cJSON *errorItem = cJSON_GetObjectItem(responseJson, "error");
-                            if (cJSON_IsString(errorItem)) {
-                                // Stampa il messaggio di errore dal campo "error"
-                                printf("Bot %d response: %s\n", currentBot, errorItem->valuestring);
-                            } else {
-                                printf("Errore lato server: Campo 'error' non valido nel JSON di risposta\n");
-                            }
-                            cJSON_Delete(responseJson);
-                        } else {
-                            // Gestire altri codici di stato HTTP se necessario
-                            fprintf(stderr, "Http status code not managed: %ld\n", http_code);
-                        }
-                        // Chiudi la sessione CURL
-                        curl_easy_cleanup(curl);
-                    }
+                    // Aggiungi la nuova richiesta al gestore multiplo
+                    curl_multi_add_handle(multi_handle, curl);
                 }
-                curl_global_cleanup();
             }
-        } else {
-            printf("Invalid format in bots.txt.\n");
         }
     }
 
     fclose(file);
+
+    // Esegui le richieste in modalità asincrona
+    int still_running = 0;
+    while (curl_multi_perform(multi_handle, &still_running) == CURLM_CALL_MULTI_PERFORM);
+
+    // Pulisci le risorse
+    curl_multi_cleanup(multi_handle);
 }
 
 // Funzione per inviare una richiesta a un bot specifico
@@ -309,7 +281,7 @@ void sendRequest(const char *command) {
         cJSON_Delete(requestJson);
 
         // Invia la richiesta al bot corrispondente
-        sendRequestToBot(target, requestJsonStr);
+        sendRequestToBotAsync(target, requestJsonStr);
 
         // Libera la memoria allocata per requestJsonStr
         free(requestJsonStr);
@@ -335,13 +307,23 @@ int isBotListening(const char *address, int port) {
         return 0;  // Non in ascolto (errore nel socket)
     }
 
-    // Imposta un timeout di 5 secondi
+    // Imposta un timeout di 5 secondi utilizzando la funzione select
     struct timeval timeout;
     timeout.tv_sec = 5;
     timeout.tv_usec = 0;
-    if (setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) < 0) {
+
+    fd_set fdSet;
+    FD_ZERO(&fdSet);
+    FD_SET(sockfd, &fdSet);
+
+    int selectResult = select(sockfd + 1, NULL, &fdSet, NULL, &timeout);
+
+    if (selectResult == -1) {
         close(sockfd);
-        return 0;  // Non in ascolto (errore nel timeout)
+        return 0;  // Errore nella select
+    } else if (selectResult == 0) {
+        close(sockfd);
+        return 0;  // Timeout della connessione
     }
 
     if (connect(sockfd, (struct sockaddr *)&server_addr, sizeof(server_addr)) == 0) {

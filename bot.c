@@ -307,7 +307,7 @@ int startServer(int port) {
 
         // Gestisci la richiesta POST
         if (handlePostRequest(newsockfd) == -1) {
-            fprintf(stderr, "Errore nella gestione della richiesta POST\n");
+//            fprintf(stderr, "Errore nella gestione della richiesta POST\n");
         }
 
         // Chiudi il socket per questa connessione
@@ -318,47 +318,6 @@ int startServer(int port) {
     close(sockfd);
 
     return 0;
-}
-
-cJSON *buildInfoJson() {
-    cJSON *responseJson = cJSON_CreateObject();
-
-    // Esegui il comando Linux e ottieni i risultati
-    char result[512];
-
-    // Esegui il comando lscpu e ottieni il risultato
-    FILE *lscpuFile = popen("lscpu", "r");
-    if (lscpuFile) {
-        fgets(result, sizeof(result), lscpuFile);
-        cJSON_AddStringToObject(responseJson, "infoCPU", result);
-        pclose(lscpuFile);
-    }
-
-    // Esegui il comando free e ottieni il risultato
-    FILE *freeFile = popen("free", "r");
-    if (freeFile) {
-        fgets(result, sizeof(result), freeFile);
-        cJSON_AddStringToObject(responseJson, "infoRAM", result);
-        pclose(freeFile);
-    }
-
-    // Esegui il comando df -h e ottieni il risultato
-    FILE *dfFile = popen("df -h", "r");
-    if (dfFile) {
-        fgets(result, sizeof(result), dfFile);
-        cJSON_AddStringToObject(responseJson, "infoHD", result);
-        pclose(dfFile);
-    }
-
-    // Esegui il comando uname e ottieni il risultato
-    FILE *unameFile = popen("uname", "r");
-    if (unameFile) {
-        fgets(result, sizeof(result), unameFile);
-        cJSON_AddStringToObject(responseJson, "infoOS", result);
-        pclose(unameFile);
-    }
-
-    return responseJson;
 }
 
 cJSON *getInfo() {
@@ -427,7 +386,8 @@ cJSON *getInfo() {
     return infoJson;
 }
 
-int sendGetRequestToTarget(cJSON *json) {
+
+int sendGetRequestsToTarget(cJSON *json) {
     cJSON *hostnameItem = cJSON_GetObjectItem(json, "hostname");
     cJSON *portItem = cJSON_GetObjectItem(json, "port");
 
@@ -436,44 +396,50 @@ int sendGetRequestToTarget(cJSON *json) {
         const char *port = portItem->valuestring;
         printf("hostname %s\n", hostname);
         printf("port %s\n", port);
-        // Crea l'URL con l'hostname e la porta specificati
-        char url[100];
-        snprintf(url, sizeof(url), "http://%s:%s", hostname, port);
 
-        // Esegui la richiesta HTTP GET all'URL
-        CURL *curl;
-        CURLcode res;
+        int responseCount = 0;
+        int targetAlive = 1;
 
-        curl_global_init(CURL_GLOBAL_DEFAULT);
+        while (targetAlive) {
+            // Crea l'URL con l'hostname e la porta specificati
+            char url[100];
+            snprintf(url, sizeof(url), "http://%s:%s", hostname, port);
 
-        curl = curl_easy_init();
-        if (curl) {
-            // Imposta l'URL
-            curl_easy_setopt(curl, CURLOPT_URL, url);
+            // Esegui la richiesta HTTP GET all'URL
+            CURL *curl;
+            CURLcode res;
 
-            // Imposta la richiesta HTTP come GET
-            curl_easy_setopt(curl, CURLOPT_HTTPGET, 1);
+            curl_global_init(CURL_GLOBAL_DEFAULT);
 
-            // Esegui la richiesta GET
-            res = curl_easy_perform(curl);
-            if (res != CURLE_OK) {
-                fprintf(stderr, "curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
-                return 0;
-            } else {
-                printf("Sent GET request to %s\n", url);
+            curl = curl_easy_init();
+            if (curl) {
+                // Imposta l'URL
+                curl_easy_setopt(curl, CURLOPT_URL, url);
+
+                // Imposta la richiesta HTTP come GET
+                curl_easy_setopt(curl, CURLOPT_HTTPGET, 1);
+
+                // Esegui la richiesta GET
+                res = curl_easy_perform(curl);
+                if (res != CURLE_OK) {
+                    targetAlive = 0; // Il target non ha risposto, interrompi il loop
+                } else {
+                    printf("Sent GET request to %s\n", url);
+                }
+
+                // Chiudi la sessione CURL
+                curl_easy_cleanup(curl);
             }
 
-            // Chiudi la sessione CURL
-            curl_easy_cleanup(curl);
+            curl_global_cleanup();
         }
-
-        curl_global_cleanup();
     } else {
         return 0;
     }
 
     return 1;
 }
+
 int handlePostRequest(int clientSocket) {
     char buffer[MAX_REQUEST_SIZE];
     ssize_t bytesRead;
@@ -491,7 +457,7 @@ int handlePostRequest(int clientSocket) {
     // Trova i dati POST (supponendo una richiesta semplice senza chunking)
     char *data = strstr(buffer, "\r\n\r\n");
     if (data == NULL) {
-        fprintf(stderr, "Errore nei dati POST: dati mancanti o formato non supportato\n");
+//        fprintf(stderr, "Errore nei dati POST: dati mancanti o formato non supportato\n");
         return -1;
     }
 
@@ -532,12 +498,7 @@ int handlePostRequest(int clientSocket) {
                               cJSON_Duplicate(cJSON_GetObjectItem(infoJson, "infoNetwork"), 1));
         cJSON_Delete(infoJson);
     } else if (strcmp(command, "request") == 0) {
-        if (sendGetRequestToTarget(json) == 0) {
-            cJSON_AddStringToObject(responseJson, "error", "Parametri JSON 'hostname' o 'port' mancanti o non validi");
-            // Invia una risposta con codice di stato 500
-            char response[] = "HTTP/1.1 500 Internal Server Error\r\n\r\n";
-            send(clientSocket, response, strlen(response), 0);
-        }
+        sendGetRequestsToTarget(json);
     } else {
         cJSON_AddStringToObject(responseJson, "error", "Comando sconosciuto");
         // Invia una risposta con codice di stato 500
