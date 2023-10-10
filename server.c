@@ -4,13 +4,15 @@
 #include <unistd.h>
 #include <arpa/inet.h>
 
-#define PORT 8080
-
-int main() {
+int main(int argc, char *argv[]) {
     int server_fd, new_socket;
     struct sockaddr_in address;
     int addrlen = sizeof(address);
-
+    int PORT = 8081;
+    // Verifica se è stato passato un argomento per la porta
+    if (argc == 2) {
+        PORT = atoi(argv[1]); // Converti l'argomento in un numero intero
+    }
     // Creare il socket
     if ((server_fd = socket(AF_INET, SOCK_STREAM, 0)) == 0) {
         perror("Errore nella creazione del socket");

