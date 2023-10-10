@@ -145,6 +145,12 @@ void printSystemInfo(const char *jsonStr) {
     cJSON_Delete(json);
 }
 
+// Funzione di scrittura personalizzata per cURL
+size_t writeCallback(void *contents, size_t size, size_t nmemb, void *userp) {
+    // Ignora i dati ricevuti
+    return size * nmemb;
+}
+
 void handle_post_request(int client_socket, char *data) {
     cJSON *json = cJSON_Parse(data);
     if (json == NULL) {
@@ -218,6 +224,8 @@ void sendRequestToBot(const char *target, const char *requestJsonStr) {
         char *timestamp = strtok(line, "|");
         char *ip = strtok(NULL, "|");
         char *portStr = strtok(NULL, "|");
+        char responseData[4096];  // Dimensione massima della risposta
+        memset(responseData, 0, sizeof(responseData));  // Inizializza la variabile
 
         if (ip != NULL && portStr != NULL) {
             int port = atoi(portStr);
@@ -238,23 +246,43 @@ void sendRequestToBot(const char *target, const char *requestJsonStr) {
 
                     // Imposta l'URL
                     curl_easy_setopt(curl, CURLOPT_URL, url);
-
                     // Imposta i dati JSON da inviare
                     curl_easy_setopt(curl, CURLOPT_POSTFIELDS, requestJsonStr);
-
+                    // Esegui la richiesta POST
+                    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writeCallback);
+                    // setto la response data
+                    curl_easy_setopt(curl, CURLOPT_WRITEDATA, responseData);
                     // Esegui la richiesta POST
                     res = curl_easy_perform(curl);
                     if (res != CURLE_OK) {
                         fprintf(stderr, "curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
                     } else {
-                        // Stampa il messaggio di richiesta inviata
-                        printf("Richiesta inviata dal bot %d\n", currentBot);
+                        // Verifica il codice di stato HTTP della risposta
+                        long http_code = 0;
+                        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
 
+                        if (http_code == 200) {
+                            // La richiesta ha avuto successo, quindi non stampiamo il JSON ma rispondiamo con il messaggio
+                            printf("Request sent by bot # %d\n", currentBot);
+                        } else if (http_code == 500) {
+                            // La richiesta ha generato un errore lato server
+                            cJSON *responseJson = cJSON_Parse(responseData);
+                            cJSON *errorItem = cJSON_GetObjectItem(responseJson, "error");
+                            if (cJSON_IsString(errorItem)) {
+                                // Stampa il messaggio di errore dal campo "error"
+                                printf("Bot %d response: %s\n", currentBot, errorItem->valuestring);
+                            } else {
+                                printf("Errore lato server: Campo 'error' non valido nel JSON di risposta\n");
+                            }
+                            cJSON_Delete(responseJson);
+                        } else {
+                            // Gestire altri codici di stato HTTP se necessario
+                            fprintf(stderr, "Http status code not managed: %ld\n", http_code);
+                        }
                         // Chiudi la sessione CURL
                         curl_easy_cleanup(curl);
                     }
                 }
-
                 curl_global_cleanup();
             }
         } else {

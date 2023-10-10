@@ -458,6 +458,7 @@ int sendGetRequestToTarget(cJSON *json) {
             res = curl_easy_perform(curl);
             if (res != CURLE_OK) {
                 fprintf(stderr, "curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
+                return 0;
             } else {
                 printf("Sent GET request to %s\n", url);
             }
@@ -473,7 +474,6 @@ int sendGetRequestToTarget(cJSON *json) {
 
     return 1;
 }
-
 int handlePostRequest(int clientSocket) {
     char buffer[MAX_REQUEST_SIZE];
     ssize_t bytesRead;
@@ -501,6 +501,9 @@ int handlePostRequest(int clientSocket) {
     cJSON *json = cJSON_Parse(data);
     if (json == NULL) {
         fprintf(stderr, "Errore nel parsing del JSON\n");
+        // Invia una risposta con codice di stato 500
+        char response[] = "HTTP/1.1 500 Internal Server Error\r\n\r\n";
+        send(clientSocket, response, strlen(response), 0);
         return -1;
     }
 
@@ -508,6 +511,9 @@ int handlePostRequest(int clientSocket) {
     if (!cJSON_IsString(commandItem)) {
         fprintf(stderr, "Errore: campo 'command' non presente o non è una stringa\n");
         cJSON_Delete(json);
+        // Invia una risposta con codice di stato 500
+        char response[] = "HTTP/1.1 500 Internal Server Error\r\n\r\n";
+        send(clientSocket, response, strlen(response), 0);
         return -1;
     }
 
@@ -528,9 +534,15 @@ int handlePostRequest(int clientSocket) {
     } else if (strcmp(command, "request") == 0) {
         if (sendGetRequestToTarget(json) == 0) {
             cJSON_AddStringToObject(responseJson, "error", "Parametri JSON 'hostname' o 'port' mancanti o non validi");
+            // Invia una risposta con codice di stato 500
+            char response[] = "HTTP/1.1 500 Internal Server Error\r\n\r\n";
+            send(clientSocket, response, strlen(response), 0);
         }
     } else {
         cJSON_AddStringToObject(responseJson, "error", "Comando sconosciuto");
+        // Invia una risposta con codice di stato 500
+        char response[] = "HTTP/1.1 500 Internal Server Error\r\n\r\n";
+        send(clientSocket, response, strlen(response), 0);
     }
 
     // Converti il JSON di risposta in una stringa
