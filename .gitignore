@@ -1,3 +1,5 @@
 ./cnc
 ./bot
+./server
+./cnc-server
 ./idea/*
