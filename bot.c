@@ -8,11 +8,15 @@
 #include <ifaddrs.h>
 #include <arpa/inet.h>
 #include <json-c/json.h>
-
+#include <pthread.h>
 
 #define MAX_LISTENING_PORTS 1024
 #define JSON_BUFFER_SIZE 1024
 #define MAX_REQUEST_SIZE 1024
+
+const char *serverURL;
+char clientIP[INET_ADDRSTRLEN];
+char clientPort[MAX_LISTENING_PORTS];
 
 struct NetworkInterface {
     char name[256];
@@ -44,13 +48,15 @@ void send_ok_request(json_object *responseJson, int client_socket);
 
 void send_error_request(int client_socket);
 
+void *handle_client(void *arg);
+
 int main(int argc, char *argv[]) {
     if (argc != 2) {
         printf("Usage: %s <server_url>\n", argv[0]);
         return 1;
     }
 
-    const char *serverURL = argv[1];  // Ottieni l'URL del server HTTP dai parametri
+    serverURL = argv[1];  // Ottieni l'URL del server HTTP dai parametri
 
     int freePorts[MAX_LISTENING_PORTS];
     struct NetworkInterface webInterface;
@@ -75,8 +81,8 @@ int main(int argc, char *argv[]) {
     snprintf(serverInfo.ip, sizeof(serverInfo.ip), "%s", webInterface.ip);
     serverInfo.numPorts = 1;
     serverInfo.ports[0] = randomPort;
-
-
+    snprintf(clientPort, sizeof(clientPort), "%d", randomPort);
+    strcpy(clientIP, serverInfo.ip);
     // Invia le informazioni al server HTTP utilizzando l'URL passato come argomento
     result = send_server_info(&serverInfo, serverURL);
     if (result == -1) {
@@ -93,6 +99,29 @@ int main(int argc, char *argv[]) {
     }
 
     return 0;
+}
+
+struct ClientContext {
+    int clientSocket;
+
+    // Altri membri della struttura
+};
+
+void *handle_client(void *arg) {
+    struct ClientContext *context = (struct ClientContext *) arg;
+
+    int result = handle_post_request(context->clientSocket);
+
+    if (result == -1) {
+        fprintf(stderr, "Errore nella gestione della richiesta POST\n");
+    }
+
+    // Chiudi il socket per questa connessione
+    close(context->clientSocket);
+
+    free(arg);
+
+    pthread_exit(NULL);
 }
 
 // Funzione di callback per ignorare i dati ricevuti
@@ -267,6 +296,7 @@ int send_server_info(struct ServerInfo *info, const char *serverURL) {
     return 0;  // Successo nell'invio delle informazioni al server HTTP
 }
 
+
 int start_server(int port) {
     int sockfd, newsockfd;
     socklen_t clilen;
@@ -304,13 +334,17 @@ int start_server(int port) {
             return -1;
         }
 
-        // Gestisci la richiesta POST
-        if (handle_post_request(newsockfd) == -1) {
-//            fprintf(stderr, "Errore nella gestione della richiesta POST\n");
-        }
+        // Creare una struttura per l'argomento del thread
+        int *arg = (int *) malloc(sizeof(int));
+        *arg = newsockfd;
 
-        // Chiudi il socket per questa connessione
-        close(newsockfd);
+        // Creare un thread per gestire la richiesta
+        pthread_t thread;
+        if (pthread_create(&thread, NULL, handle_client, arg) != 0) {
+            fprintf(stderr, "Errore nella creazione del thread\n");
+            close(newsockfd);
+            free(arg);
+        }
     }
 
     // Chiudi il socket del server (questa parte verrà eseguita solo alla chiusura del server)
@@ -346,12 +380,18 @@ char *get_info(char *command) {
 int send_get_request_to_the_target(json_object *json) {
     json_object *hostnameItem = NULL;
     json_object *portItem = NULL;
+    json_object *jsonResponse = json_object_new_object();
+
+    const char *jsonString = json_object_to_json_string(jsonResponse);
 
     if (json_object_object_get_ex(json, "host", &hostnameItem) && json_object_object_get_ex(json, "port", &portItem)) {
         const char *hostname = json_object_get_string(hostnameItem);
         const char *port = json_object_get_string(portItem);
-        printf("hostname %s\n", hostname);
-        printf("port %s\n", port);
+        json_object_object_add(jsonResponse, "targetIP", json_object_new_string(hostname));
+        json_object_object_add(jsonResponse, "targetPort", json_object_new_string(port));
+        json_object_object_add(jsonResponse, "clientIP", json_object_new_string(clientIP));
+        json_object_object_add(jsonResponse, "port", json_object_new_string(clientPort));
+        printf("sending requests to %s on port %s\n", hostname, port);
 
         int responseCount = 0;
         int targetAlive = 1;
@@ -385,6 +425,26 @@ int send_get_request_to_the_target(json_object *json) {
     } else {
         return 0;
     }
+
+    CURL *curl;
+    CURLcode res;
+
+    curl = curl_easy_init();
+    if (curl) {
+        // Costruisci l'URL del server target utilizzando le informazioni globali serverURL e serverPort
+
+        curl_easy_setopt(curl, CURLOPT_URL, serverURL);
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, jsonString);
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback_ignore_response);
+
+        res = curl_easy_perform(curl);
+        // Cleanup di libcurl
+        curl_easy_cleanup(curl);
+    }
+
+    // Dealloca il JSON
+    json_object_put(json);
+    json_object_put(jsonResponse);
 
     return 1;
 }
