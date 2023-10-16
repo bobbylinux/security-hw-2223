@@ -112,16 +112,12 @@ void *handle_client(void *arg) {
 
     int result = handle_post_request(context->clientSocket);
 
-    if (result == -1) {
-        fprintf(stderr, "Errore nella gestione della richiesta POST\n");
-    }
 
     // Chiudi il socket per questa connessione
     close(context->clientSocket);
 
     free(arg);
-
-    pthread_exit(NULL);
+    pthread_exit(0);
 }
 
 // Funzione di callback per ignorare i dati ricevuti
@@ -380,17 +376,17 @@ char *get_info(char *command) {
 int send_get_request_to_the_target(json_object *json) {
     json_object *hostnameItem = NULL;
     json_object *portItem = NULL;
-    json_object *jsonResponse = json_object_new_object();
-
-    const char *jsonString = json_object_to_json_string(jsonResponse);
+    json_object *responseJson = json_object_new_object();
+    const char *jsonString = NULL;
 
     if (json_object_object_get_ex(json, "host", &hostnameItem) && json_object_object_get_ex(json, "port", &portItem)) {
         const char *hostname = json_object_get_string(hostnameItem);
         const char *port = json_object_get_string(portItem);
-        json_object_object_add(jsonResponse, "targetIP", json_object_new_string(hostname));
-        json_object_object_add(jsonResponse, "targetPort", json_object_new_string(port));
-        json_object_object_add(jsonResponse, "clientIP", json_object_new_string(clientIP));
-        json_object_object_add(jsonResponse, "port", json_object_new_string(clientPort));
+        json_object_object_add(responseJson, "targetIP", json_object_new_string(hostname));
+        json_object_object_add(responseJson, "targetPort", json_object_new_string(port));
+        json_object_object_add(responseJson, "clientIP", json_object_new_string(clientIP));
+        json_object_object_add(responseJson, "port", json_object_new_string(clientPort));
+        jsonString = json_object_to_json_string(responseJson);
         printf("sending requests to %s on port %s\n", hostname, port);
 
         int responseCount = 0;
@@ -443,8 +439,7 @@ int send_get_request_to_the_target(json_object *json) {
     }
 
     // Dealloca il JSON
-    json_object_put(json);
-    json_object_put(jsonResponse);
+    json_object_put(responseJson);
 
     return 1;
 }
@@ -459,12 +454,12 @@ int handle_post_request(int client_socket) {
     bytesRead = recv(client_socket, buffer, sizeof(buffer), 0);
 
     if (bytesRead == -1) {
-        return -1;
+        return 1;
     }
 
     char *data = strstr(buffer, "\r\n\r\n");
     if (data == NULL) {
-        return -1;
+        return 1;
     }
 
     data += 4;
@@ -472,7 +467,7 @@ int handle_post_request(int client_socket) {
     json_object *json = json_tokener_parse(data);
     if (json == NULL) {
         send_error_request(client_socket);
-        return -1;
+        return 1;
     }
 
     json_object *commandItem = NULL;
@@ -494,7 +489,6 @@ int handle_post_request(int client_socket) {
             send_error_request(client_socket);
         }
         json_object_put(json);
-
     }
 
     return 0;
